@@ -325,8 +325,14 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
     }
 
     // Modes not yet implemented (Batch 3+)
-    if args.compare.is_some() {
-        anyhow::bail!("compare mode (-m) is not yet implemented");
+    if let Some(ref compare_arg) = args.compare {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let mut app = App::new(work_dir, &cli_overrides)?;
+        return review::cmd_review_compare(&mut app, compare_arg).await;
     }
     if args.list > 0 {
         let cli_overrides = CliOverrides {

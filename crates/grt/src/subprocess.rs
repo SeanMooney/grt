@@ -226,6 +226,17 @@ pub fn git_credential_reject(
     Ok(())
 }
 
+/// Fetch a ref from a remote and return the SHA it resolves to.
+pub fn git_fetch_ref_sha(remote: &str, git_ref: &str, work_dir: &Path) -> Result<String> {
+    git_exec(&["fetch", remote, git_ref], work_dir)?;
+    git_output(&["rev-parse", "FETCH_HEAD"], work_dir)
+}
+
+/// Diff two commits, inheriting stdout/stderr for interactive output.
+pub fn git_diff(commit_a: &str, commit_b: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["diff", commit_a, commit_b], work_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

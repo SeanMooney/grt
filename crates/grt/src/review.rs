@@ -386,6 +386,80 @@ pub async fn cmd_review_cherrypickonly(app: &mut App, change_arg: &str) -> Resul
     Ok(())
 }
 
+/// Parse a compare argument: `"CHANGE,PS[-PS]"`.
+///
+/// - `"12345,1-3"` → `("12345", 1, Some(3))`
+/// - `"12345,1"` → `("12345", 1, None)` (diff patchset against current revision)
+///
+/// Returns an error if the format is invalid.
+pub fn parse_compare_arg(input: &str) -> Result<(String, i32, Option<i32>)> {
+    let (change, ps_part) = input
+        .split_once(',')
+        .context("compare argument must be CHANGE,PS[-PS]")?;
+
+    if change.is_empty() {
+        anyhow::bail!("compare argument has empty change number");
+    }
+
+    if let Some((from_str, to_str)) = ps_part.split_once('-') {
+        let from: i32 = from_str
+            .parse()
+            .context("invalid 'from' patchset number in compare argument")?;
+        let to: i32 = to_str
+            .parse()
+            .context("invalid 'to' patchset number in compare argument")?;
+        Ok((change.to_string(), from, Some(to)))
+    } else {
+        let from: i32 = ps_part
+            .parse()
+            .context("invalid patchset number in compare argument")?;
+        Ok((change.to_string(), from, None))
+    }
+}
+
+/// Compare two patchsets of a change by diffing their fetched refs.
+///
+/// When `ps_to` is `None`, diffs against the change's current revision.
+pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> {
+    let (change_id, ps_from, ps_to) = parse_compare_arg(compare_arg)?;
+
+    app.authenticate_and_verify().await?;
+
+    debug!(
+        "comparing change {} patchset {} vs {:?}",
+        change_id, ps_from, ps_to
+    );
+    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+
+    let (_, rev_from) = find_target_revision(&change, Some(ps_from))?;
+    let ref_from = rev_from
+        .git_ref
+        .as_deref()
+        .context("source revision has no ref")?
+        .to_string();
+
+    let (_, rev_to) = find_target_revision(&change, ps_to)?;
+    let ps_to_num = rev_to.number.unwrap_or(0);
+    let ref_to = rev_to
+        .git_ref
+        .as_deref()
+        .context("target revision has no ref")?
+        .to_string();
+
+    let remote = app.config.remote.clone();
+    let root = app.git.root()?;
+
+    eprintln!(
+        "Comparing change {} patchset {} vs {}...",
+        change_id, ps_from, ps_to_num
+    );
+    let sha_from = subprocess::git_fetch_ref_sha(&remote, &ref_from, &root)?;
+    let sha_to = subprocess::git_fetch_ref_sha(&remote, &ref_to, &root)?;
+    subprocess::git_diff(&sha_from, &sha_to, &root)?;
+
+    Ok(())
+}
+
 /// List open changes on Gerrit.
 ///
 /// Queries `status:open project:<project>` (and `branch:<branch>` if specified).
@@ -1115,6 +1189,56 @@ mod tests {
         assert_eq!(
             download_branch_name(&change, 2),
             "review/Alice_Smith/my-feature"
+        );
+    }
+
+    // === parse_compare_arg ===
+
+    #[test]
+    fn compare_arg_range() {
+        let (change, from, to) = parse_compare_arg("12345,1-3").unwrap();
+        assert_eq!(change, "12345");
+        assert_eq!(from, 1);
+        assert_eq!(to, Some(3));
+    }
+
+    #[test]
+    fn compare_arg_single_patchset() {
+        let (change, from, to) = parse_compare_arg("12345,1").unwrap();
+        assert_eq!(change, "12345");
+        assert_eq!(from, 1);
+        assert_eq!(to, None);
+    }
+
+    #[test]
+    fn compare_arg_no_comma() {
+        let result = parse_compare_arg("12345");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("CHANGE,PS"),
+            "error should mention expected format"
+        );
+    }
+
+    #[test]
+    fn compare_arg_invalid_patchset() {
+        let result = parse_compare_arg("12345,abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compare_arg_invalid_range_to() {
+        let result = parse_compare_arg("12345,1-abc");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compare_arg_empty_change() {
+        let result = parse_compare_arg(",1-3");
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("empty"),
+            "error should mention empty change number"
         );
     }
 }
