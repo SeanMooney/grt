@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 use url::Url;
 
 /// Configuration for connecting to a Gerrit instance.
@@ -56,6 +57,63 @@ pub struct CliOverrides {
     pub branch: Option<String>,
     pub remote: Option<String>,
     pub scheme: Option<String>,
+    /// Allow sending credentials over plain HTTP (no TLS).
+    pub insecure: bool,
+}
+
+/// A single server entry in `credentials.toml`.
+#[derive(Deserialize)]
+struct ServerCredential {
+    name: String,
+    username: String,
+    password: String,
+}
+
+/// Top-level structure of `~/.config/grt/credentials.toml`.
+#[derive(Deserialize)]
+struct CredentialsFile {
+    server: Vec<ServerCredential>,
+}
+
+/// Load credentials for `host` from `<config_dir>/grt/credentials.toml`.
+///
+/// Returns `Ok(None)` if the file is missing or no entry matches `host`.
+/// Returns `Err` if the file has bad permissions (must be `0600` on Unix) or invalid TOML.
+pub fn load_credentials(host: &str, config_dir: &Path) -> Result<Option<(String, String)>> {
+    let cred_path = config_dir.join("grt").join("credentials.toml");
+    if !cred_path.exists() {
+        return Ok(None);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(&cred_path)
+            .with_context(|| format!("reading metadata for {}", cred_path.display()))?;
+        let mode = metadata.mode() & 0o777;
+        if mode != 0o600 {
+            anyhow::bail!(
+                "{} has permissions {:04o}, expected 0600. \
+                 Fix with: chmod 600 {}",
+                cred_path.display(),
+                mode,
+                cred_path.display(),
+            );
+        }
+    }
+
+    let content = std::fs::read_to_string(&cred_path)
+        .with_context(|| format!("reading {}", cred_path.display()))?;
+    let creds: CredentialsFile =
+        toml::from_str(&content).with_context(|| format!("parsing {}", cred_path.display()))?;
+
+    for server in &creds.server {
+        if server.name == host {
+            return Ok(Some((server.username.clone(), server.password.clone())));
+        }
+    }
+
+    Ok(None)
 }
 
 /// Parse a `.gitreview` INI file. Expects a `[gerrit]` section with key=value pairs.
@@ -112,8 +170,7 @@ pub fn load_config(
             config.host = host.clone();
         }
         if let Some(port) = values.get("port") {
-            config.ssh_port =
-                Some(port.parse::<u16>().context("parsing port in .gitreview")?);
+            config.ssh_port = Some(port.parse::<u16>().context("parsing port in .gitreview")?);
         }
         if let Some(project) = values.get("project") {
             config.project = project.clone();
@@ -355,5 +412,120 @@ project=my/project
         // REST API URL should use standard HTTPS port
         let url = config.gerrit_base_url().unwrap();
         assert_eq!(url.as_str(), "https://review.opendev.org/");
+    }
+
+    fn write_credentials_file(dir: &Path, content: &str) -> std::path::PathBuf {
+        let grt_dir = dir.join("grt");
+        std::fs::create_dir_all(&grt_dir).unwrap();
+        let cred_path = grt_dir.join("credentials.toml");
+        std::fs::write(&cred_path, content).unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cred_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        cred_path
+    }
+
+    #[test]
+    fn load_credentials_matching_host() {
+        let dir = tempfile::tempdir().unwrap();
+        write_credentials_file(
+            dir.path(),
+            r#"
+[[server]]
+name = "review.opendev.org"
+username = "alice"
+password = "secret-token"
+"#,
+        );
+
+        let result = load_credentials("review.opendev.org", dir.path()).unwrap();
+        assert_eq!(
+            result,
+            Some(("alice".into(), "secret-token".into())),
+            "should return matching credentials"
+        );
+    }
+
+    #[test]
+    fn load_credentials_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        write_credentials_file(
+            dir.path(),
+            r#"
+[[server]]
+name = "review.opendev.org"
+username = "alice"
+password = "secret-token"
+"#,
+        );
+
+        let result = load_credentials("other.example.com", dir.path()).unwrap();
+        assert_eq!(result, None, "should return None for non-matching host");
+    }
+
+    #[test]
+    fn load_credentials_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = load_credentials("review.opendev.org", dir.path()).unwrap();
+        assert_eq!(result, None, "should return None when file is missing");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_credentials_bad_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let cred_path = write_credentials_file(
+            dir.path(),
+            r#"
+[[server]]
+name = "review.opendev.org"
+username = "alice"
+password = "secret-token"
+"#,
+        );
+
+        // Set bad permissions
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cred_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let err = load_credentials("review.opendev.org", dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("0644"),
+            "error should mention actual permissions: {err}"
+        );
+        assert!(
+            err.to_string().contains("0600"),
+            "error should mention expected permissions: {err}"
+        );
+    }
+
+    #[test]
+    fn load_credentials_multiple_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        write_credentials_file(
+            dir.path(),
+            r#"
+[[server]]
+name = "review.opendev.org"
+username = "alice"
+password = "token-1"
+
+[[server]]
+name = "review.other.org"
+username = "bob"
+password = "token-2"
+"#,
+        );
+
+        let result = load_credentials("review.other.org", dir.path()).unwrap();
+        assert_eq!(
+            result,
+            Some(("bob".into(), "token-2".into())),
+            "should match second server entry"
+        );
     }
 }

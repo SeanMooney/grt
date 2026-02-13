@@ -1,17 +1,29 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use tracing::debug;
 
 use crate::config::{self, CliOverrides, GerritConfig};
 use crate::gerrit::{Credentials, GerritClient};
 use crate::git::GitRepo;
 use crate::subprocess;
 
+/// Indicates where credentials were sourced from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CredentialSource {
+    /// Loaded from `~/.config/grt/credentials.toml`.
+    File,
+    /// Obtained via `git credential fill`.
+    GitHelper,
+}
+
 /// Application context holding shared resources.
 pub struct App {
     pub config: GerritConfig,
     pub git: GitRepo,
     pub gerrit: GerritClient,
+    credential_source: Option<CredentialSource>,
+    insecure: bool,
 }
 
 impl App {
@@ -35,20 +47,120 @@ impl App {
             config,
             git,
             gerrit,
+            credential_source: None,
+            insecure: cli.insecure,
         })
     }
 
-    /// Attempt to acquire credentials from git credential helper and configure the client.
+    /// Acquire credentials: try credentials.toml first, then git credential helper.
+    ///
+    /// When credentials come from the git helper, a successful `authenticate_and_verify`
+    /// will call `git credential approve` so the helper can cache them.
+    ///
+    /// Refuses to send credentials over plain HTTP unless `--insecure` was passed.
     pub fn authenticate(&mut self) -> Result<()> {
+        if self.config.scheme != "https" && !self.insecure {
+            anyhow::bail!(
+                "refusing to send credentials over plain HTTP (scheme: {}). \
+                 Use --insecure to override, or switch to HTTPS",
+                self.config.scheme,
+            );
+        }
+
+        // Try credentials.toml first
+        if let Some(config_dir) = dirs::config_dir() {
+            match config::load_credentials(&self.config.host, &config_dir) {
+                Ok(Some((username, password))) => {
+                    debug!("credentials loaded from credentials.toml");
+                    self.set_credentials(username, password, CredentialSource::File)?;
+                    return Ok(());
+                }
+                Ok(None) => {
+                    debug!("no matching entry in credentials.toml, trying git credential helper");
+                }
+                Err(e) => {
+                    return Err(e).context("loading credentials from credentials.toml");
+                }
+            }
+        }
+
+        // Fall back to git credential helper
         let url = self.config.gerrit_base_url()?.to_string();
         let root = self.git.root()?;
         let (username, password) =
             subprocess::git_credential_fill(&url, &root).context("acquiring credentials")?;
+        self.set_credentials(username, password, CredentialSource::GitHelper)?;
+        Ok(())
+    }
+
+    /// Authenticate and verify credentials by calling `/accounts/self`.
+    ///
+    /// On success with git-helper-sourced credentials, calls `git credential approve`.
+    /// On failure with git-helper-sourced credentials, calls `git credential reject`.
+    pub async fn authenticate_and_verify(&mut self) -> Result<()> {
+        self.authenticate()?;
+
+        match self.gerrit.get_self_account().await {
+            Ok(account) => {
+                let name = account.name.as_deref().unwrap_or("unknown");
+                debug!(user = name, "credentials verified");
+
+                if self.credential_source == Some(CredentialSource::GitHelper) {
+                    self.approve_git_credentials();
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if self.credential_source == Some(CredentialSource::GitHelper) {
+                    self.reject_git_credentials();
+                }
+                Err(e).context("verifying credentials against Gerrit")
+            }
+        }
+    }
+
+    fn set_credentials(
+        &mut self,
+        username: String,
+        password: String,
+        source: CredentialSource,
+    ) -> Result<()> {
         self.gerrit
             .set_credentials(Credentials { username, password });
+        self.credential_source = Some(source);
         // Re-create client with auth prefix
         let base_url = self.config.gerrit_base_url()?;
         self.gerrit = GerritClient::new(base_url, self.gerrit.credentials().cloned())?;
         Ok(())
+    }
+
+    fn approve_git_credentials(&self) {
+        if let Some(creds) = self.gerrit.credentials() {
+            if let Ok(url) = self.config.gerrit_base_url() {
+                if let Ok(root) = self.git.root() {
+                    let _ = subprocess::git_credential_approve(
+                        url.as_str(),
+                        &creds.username,
+                        &creds.password,
+                        &root,
+                    );
+                }
+            }
+        }
+    }
+
+    fn reject_git_credentials(&self) {
+        if let Some(creds) = self.gerrit.credentials() {
+            if let Ok(url) = self.config.gerrit_base_url() {
+                if let Ok(root) = self.git.root() {
+                    let _ = subprocess::git_credential_reject(
+                        url.as_str(),
+                        &creds.username,
+                        &creds.password,
+                        &root,
+                    );
+                }
+            }
+        }
     }
 }

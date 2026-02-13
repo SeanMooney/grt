@@ -27,6 +27,10 @@ struct Cli {
     #[arg(long, global = true)]
     no_color: bool,
 
+    /// Allow sending credentials over plain HTTP (no TLS)
+    #[arg(long, global = true)]
+    insecure: bool,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -184,18 +188,20 @@ async fn main() -> Result<()> {
         .directory
         .unwrap_or_else(|| std::env::current_dir().expect("cannot determine current directory"));
 
+    let insecure = cli.insecure;
     match cli.command {
-        Commands::Push(args) => cmd_push(&work_dir, args).await,
-        Commands::Comments(args) => cmd_comments(&work_dir, args).await,
-        Commands::Setup(args) => cmd_setup(&work_dir, args).await,
+        Commands::Push(args) => cmd_push(&work_dir, args, insecure).await,
+        Commands::Comments(args) => cmd_comments(&work_dir, args, insecure).await,
+        Commands::Setup(args) => cmd_setup(&work_dir, args, insecure).await,
         Commands::Version => cmd_version(&work_dir).await,
     }
 }
 
-async fn cmd_push(work_dir: &Path, args: PushArgs) -> Result<()> {
+async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()> {
     let cli_overrides = CliOverrides {
         remote: args.remote.clone(),
         branch: args.branch.clone(),
+        insecure,
         ..Default::default()
     };
     let app = App::new(work_dir, &cli_overrides)?;
@@ -260,12 +266,15 @@ async fn cmd_push(work_dir: &Path, args: PushArgs) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_comments(work_dir: &Path, args: CommentsArgs) -> Result<()> {
-    let cli_overrides = CliOverrides::default();
+async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Result<()> {
+    let cli_overrides = CliOverrides {
+        insecure,
+        ..Default::default()
+    };
     let mut app = App::new(work_dir, &cli_overrides)?;
 
-    // Authenticate for API access
-    app.authenticate()?;
+    // Authenticate for API access and verify credentials
+    app.authenticate_and_verify().await?;
 
     // Determine change identifier
     let change_id = match args.change {
@@ -328,9 +337,10 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_setup(work_dir: &Path, args: SetupArgs) -> Result<()> {
+async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<()> {
     let cli_overrides = CliOverrides {
         remote: args.remote.clone(),
+        insecure,
         ..Default::default()
     };
     let mut app = App::new(work_dir, &cli_overrides)?;
