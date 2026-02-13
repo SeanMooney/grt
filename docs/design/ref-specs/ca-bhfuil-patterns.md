@@ -311,7 +311,7 @@ ca-bhfuil's async architecture wraps synchronous pygit2 calls in `asyncio.to_thr
 
 grt will use tokio, which provides:
 
-- **`tokio::task::spawn_blocking()`** instead of `asyncio.to_thread()` for blocking git2 calls
+- **`tokio::task::spawn_blocking()`** instead of `asyncio.to_thread()` for blocking gix calls
 - **`tokio::sync::Semaphore`** instead of `asyncio.Semaphore` for concurrency control
 - **`tokio::sync::mpsc`** channels instead of `asyncio.Queue` for progress reporting
 - **Structured concurrency** via `tokio::task::JoinSet` instead of `asyncio.gather()`, with the ability to cancel all tasks when the set is dropped

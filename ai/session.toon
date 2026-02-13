@@ -1,6 +1,6 @@
-phase: Repo bootstrap and design reorganization
+phase: Tech stack adoption and design doc revision
 
-completed[8]{task,detail}:
+completed[11]{task,detail}:
   Directory structure,Created docs/design/draft/ and docs/design/adopted/
   Design doc moves,Moved 12 design docs to docs/design/draft/ via git mv
   Link fixes,Updated ref-specs/ links to ../ref-specs/ in all moved docs
@@ -9,6 +9,9 @@ completed[8]{task,detail}:
   Design README,Updated docs/design/README.md with draft/adopted lifecycle and new paths
   TOON conversion,Converted ai/context.md and ai/session.md to .toon format
   File moves,Moved rust-conventions.md and patterns.md from ai/ to docs/design/adopted/
+  tech-stack adoption,Moved tech-stack.md v0.2 to docs/design/adopted/ and deleted v0.1 from draft/
+  architecture revision,Fixed git2→gix rusqlite→sqlx references removed duplicated error diagram added config.rs module section
+  ref-spec updates,Updated grt divergence sections in 5 ref-specs to reflect gix and sqlx decisions
 
 in_progress: Nothing
 
@@ -20,10 +23,11 @@ next_steps[4]:
 
 decisions_pending[0]:
 
-handoff_notes[6]:
+handoff_notes[7]:
   ref/ directory contains Python source code for all three reference projects
   ref/ca-bhfuil/ has its own CLAUDE.md and extensive docs
   ref/gertty/ is the most complex reference — start with its data model
   All 7 ref-specs are complete and ready as input for design docs
   Cargo workspace builds and passes all checks (cargo build test clippy fmt deny)
   Build infrastructure in place: justfile flake.nix deny.toml rust-toolchain.toml nextest.toml
+  tech-stack.md is now adopted — all docs updated to reference adopted path and use gix/sqlx terminology

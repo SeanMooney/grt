@@ -1,6 +1,6 @@
 # Rust Conventions for grt
 
-Single source of truth for coding standards. Derived from `docs/design/tech-stack.md` selections.
+Single source of truth for coding standards. Derived from [tech-stack.md](tech-stack.md) selections.
 
 ## Error Handling
 
@@ -68,11 +68,12 @@ tokio::spawn(async move { tx.send(event).await });
 - Use `INSERT ... ON CONFLICT DO UPDATE` for upserts
 - Wrap multi-step operations in transactions
 
-## Git Operations (git2)
+## Git Operations (gix)
 
-- Always handle `git2::Error` — never unwrap git operations
+- Always handle gix errors — never unwrap git operations
 - Close repository handles when done (they hold file locks)
 - Validate ref names before use
+- Wrap all gix calls in `tokio::task::spawn_blocking` — gix's API is blocking
 
 ## Logging (tracing)
 

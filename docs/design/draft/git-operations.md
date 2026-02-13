@@ -5,7 +5,7 @@
 
 ## Overview
 
-<!-- TODO: git2-based operations design -->
+<!-- TODO: gix-based operations design -->
 
 ## Cherry-Pick
 
@@ -30,4 +30,4 @@
 
 ## Error Handling
 
-<!-- TODO: git2 error mapping, recovery strategies -->
+<!-- TODO: gix error mapping, recovery strategies -->

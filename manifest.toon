@@ -4,7 +4,7 @@ phase: design
 
 docs[29]{path,type,status,topics,summary}:
   AGENTS.md,guide,complete,entry-point session-protocol,AI agent entry point and knowledge base guide
-  docs/design/draft/tech-stack.md,guide,complete,rust tokio ratatui sqlx git2 reqwest,Technology selections and full architecture spec
+  docs/design/adopted/tech-stack.md,guide,adopted,rust tokio ratatui sqlx gix reqwest,Technology selections crate rationale and dependency decisions
   ai/context.toon,ai,complete,overview tech-stack layout,Stable project context and repo layout
   ai/session.toon,ai,complete,session handoff focus,Mutable session state and handoff notes
   ai/toon-spec.md,guide,complete,toon format spec,TOON format specification for AI memory files
@@ -28,7 +28,7 @@ docs[29]{path,type,status,topics,summary}:
   docs/design/draft/tui-design.md,design,stub,ratatui views events rendering,ratatui views navigation and event loop
   docs/design/draft/search-engine.md,design,stub,nucleo query fuzzy,Query language plus fuzzy search design
   docs/design/draft/config-system.md,design,stub,toml config multi-server,TOML config layered config and multi-server
-  docs/design/draft/git-operations.md,design,stub,git2 notedb hooks cherry-pick,git2 operations NoteDb reading and hook management
+  docs/design/draft/git-operations.md,design,stub,gix notedb hooks cherry-pick,gix operations NoteDb reading and hook management
   docs/design/draft/sync-engine.md,design,stub,async sync offline scheduling,Async sync task scheduling and offline mode
   docs/design/draft/error-handling.md,design,stub,anyhow errors recovery,Error types recovery and user-facing messages
   docs/design/decisions/README.md,guide,complete,adr decisions,ADR index and template

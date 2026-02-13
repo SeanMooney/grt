@@ -9,7 +9,7 @@ tree, generate software bills of materials, sign and publish releases, and suppo
 productive local development workflow.
 
 Implementation decisions — crate selection, application architecture, and library design —
-are out of scope here and are covered in `tech-stack.md`.
+are out of scope here and are covered in [tech-stack.md](../adopted/tech-stack.md).
 
 The primary audience for `grt` is Linux users. Apple Silicon macOS is a supported secondary
 target, produced via cross-compilation on Linux build nodes without requiring a macOS host.
@@ -28,7 +28,7 @@ but no GitHub Actions compute is used for any build, test, or release workload.
 ## Repository Structure
 
 See [repo-layout.md](../adopted/repo-layout.md) for the full directory structure. The internal
-structure of individual crates is defined in `tech-stack.md`.
+structure of individual crates is defined in [tech-stack.md](../adopted/tech-stack.md).
 
 ### Cargo.lock
 

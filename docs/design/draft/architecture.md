@@ -3,7 +3,7 @@
 **Related ref-specs:** `../ref-specs/ca-bhfuil-patterns.md`, `../ref-specs/gertty-sync-system.md`, `../ref-specs/gertty-data-model.md`, `../ref-specs/gertty-config-and-ui.md`
 **Status:** Draft
 
-For technology selections and crate rationale, see [tech-stack.md](tech-stack.md). This document covers how those technologies compose into a working system.
+For technology selections and crate rationale, see [tech-stack.md](../adopted/tech-stack.md). This document covers how those technologies compose into a working system.
 
 ## Overview
 
@@ -11,7 +11,7 @@ grt is an async-first, local-first, dual-interface tool for managing Git and Ger
 
 **Design philosophy:**
 
-- **Async-first.** All I/O (HTTP, SQLite, git) is non-blocking at the call site. Blocking operations (git2, rusqlite) run on dedicated blocking threads via `tokio::task::spawn_blocking`. The main event loop never blocks.
+- **Async-first.** All I/O (HTTP, SQLite, git) is non-blocking at the call site. Blocking operations (gix) run on dedicated blocking threads via `tokio::task::spawn_blocking`. The main event loop never blocks.
 - **Local-first.** The SQLite database is the single source of truth for the UI. The user never waits for a network round-trip to view data. Background sync keeps the local cache current, and pending local mutations are persisted in the database so they survive restarts.
 - **Dual-interface.** The same `App` struct serves both TUI and CLI modes. The TUI wraps it in an event loop with rendering; the CLI calls methods directly and prints results. No business logic lives in either interface layer.
 - **App as orchestrator.** Inspired by the ca-bhfuil analysis ([ref-specs/ca-bhfuil-patterns.md](../ref-specs/ca-bhfuil-patterns.md)), grt consolidates ownership into a single `App` struct rather than distributing it across multiple manager classes. Rust's ownership model makes this natural — `App` owns the database pool, config, and gerrit client, and lends references to subsystems that need them. No global singletons, no service locators, no runtime ownership tracking.
@@ -49,7 +49,7 @@ See [repo-layout.md](../adopted/repo-layout.md) for the source file layout.
 - `app.cherry_pick(change_id, branch) -> Result<()>` — git operation
 - `app.show_change(id) -> Result<ChangeDetail>` — full detail fetch
 
-**Owns:** `Config`, `Database` (sqlx pool or rusqlite connection), `GerritClient`, `GitRepo`.
+**Owns:** `Config`, `Database` (sqlx pool), `GerritClient`, `GitRepo`.
 
 **Dependencies:** `db`, `gerrit`, `git`, `notedb`, `fuzzy`.
 
@@ -100,7 +100,7 @@ See [repo-layout.md](../adopted/repo-layout.md) for the source file layout.
 
 ### git.rs — Git Operations
 
-**Responsibility:** Local git repository operations via git2.
+**Responsibility:** Local git repository operations via gix.
 
 **Public API:**
 - `GitRepo::open(path) -> Result<GitRepo>`
@@ -109,11 +109,11 @@ See [repo-layout.md](../adopted/repo-layout.md) for the source file layout.
 - `repo.is_dirty() -> Result<bool>`
 - `repo.resolve_ref(refname) -> Result<Oid>`
 
-**Owns:** `git2::Repository` handle.
+**Owns:** `gix::Repository` handle.
 
 **Dependencies:** None (leaf module).
 
-**Design note:** All git2 calls are blocking. Callers must wrap them in `spawn_blocking`. git push to Gerrit's magic refs (`refs/for/branch%topic=...`) may require shelling out to `git` since libgit2's push may not support Gerrit's custom receive-pack options.
+**Design note:** All gix calls are blocking. Callers must wrap them in `spawn_blocking`. git push to Gerrit's magic refs (`refs/for/branch%topic=...`) may require shelling out to `git` since gix's push support may not handle Gerrit's custom receive-pack options. See [tech-stack.md § Git Integration](../adopted/tech-stack.md#gix-gitoxide-v0x) for the full rationale on gix over git2.
 
 ### notedb.rs — NoteDb Reader
 
@@ -142,6 +142,22 @@ See [repo-layout.md](../adopted/repo-layout.md) for the source file layout.
 **Dependencies:** None (leaf module).
 
 **Design note:** Unlike gertty which builds SQLAlchemy expressions directly during parsing, grt separates parsing (producing a `SearchExpr` AST) from query planning (compiling the AST to SQL). This enables validation, optimization, and fuzzy matching integration. See [ref-specs/gertty-search-language.md § grt Divergences](../ref-specs/gertty-search-language.md#grt-divergences).
+
+### config.rs — Configuration
+
+**Responsibility:** Load and validate TOML configuration, resolve XDG paths, expose typed `Config` struct.
+
+**Public API:**
+- `Config::load(path: Option<&Path>) -> Result<Config>` — load from file or default XDG path
+- `config.gerrit_server() -> &Url`
+- `config.db_path() -> &Path`
+- `config.log_level() -> tracing::Level`
+
+**Owns:** Parsed configuration values, resolved paths.
+
+**Dependencies:** None (leaf module).
+
+**Design note:** Configuration errors are reported as `ConfigError` with miette span information pointing to the problematic TOML location. See [tech-stack.md § Configuration](../adopted/tech-stack.md#configuration) for the config file format and XDG path resolution.
 
 ### tui.rs — Terminal UI
 
@@ -295,8 +311,9 @@ grt uses a hybrid concurrency model combining tokio-scoped tasks (bounded lifeti
 | Background sync engine | Unscoped | `tokio::spawn` | Independent lifetime, owns cloned handles |
 | Periodic sync timer | Unscoped | `tokio::spawn` | Continues independently |
 | Individual sync tasks | Unscoped | `JoinSet` | Concurrent, bounded by semaphore |
-| SQLite operations | Blocking | `spawn_blocking` | rusqlite is synchronous |
-| git2 operations | Blocking | `spawn_blocking` | git2 is synchronous |
+| gix operations | Blocking | `spawn_blocking` | gix API is blocking |
+
+For the complete concurrency model with crate rationale, see [tech-stack.md § Concurrency Model](../adopted/tech-stack.md#concurrency-model).
 
 ### Sync Engine Concurrency
 
@@ -305,7 +322,7 @@ The sync engine adapts gertty's single-threaded sync loop into a concurrent arch
 - A **scheduler task** (`tokio::spawn`) maintains a priority queue (`BinaryHeap`) and a deduplication set (`HashSet`)
 - Sync task submissions arrive via `mpsc::Sender<SyncTask>`
 - The scheduler dispatches tasks to a **worker pool** bounded by `tokio::sync::Semaphore` (e.g., 4 concurrent HTTP requests)
-- Each worker executes one sync task: HTTP fetch → deserialize → `spawn_blocking` for DB upsert → notify UI
+- Each worker executes one sync task: HTTP fetch → deserialize → DB upsert (async via sqlx) → notify UI
 - Completion notifications flow back via `mpsc::Sender<SyncEvent>` to the TUI event loop
 
 ## Startup and Shutdown
@@ -370,27 +387,7 @@ The sync engine adapts gertty's single-threaded sync loop into a concurrent arch
 
 ### Cross-Module Error Flow
 
-```
-Leaf modules (db, gerrit, git, notedb, fuzzy)
-     │
-     │  Return Result<T, specific_error> or Result<T, anyhow::Error>
-     │  Attach context: .context("loading change 12345 from database")
-     ▼
-app.rs (orchestrator)
-     │
-     │  Catches errors, decides: retry? degrade? propagate?
-     │  Attaches higher-level context: .context("syncing project openstack/nova")
-     ▼
-Interface layer (tui.rs or main.rs CLI)
-     │
-     ├── TUI: Display error in status bar, do not crash
-     │         Catch in event handler, set app.status_message
-     │         User sees: "Error: syncing project openstack/nova: HTTP 401 Unauthorized"
-     │
-     └── CLI: Print to stderr, exit with code 1
-              eprintln!("Error: {:#}", err)  // anyhow's alternate display shows chain
-              std::process::exit(1)
-```
+For the error type hierarchy and flow diagram, see [tech-stack.md § Error Strategy at a Glance](../adopted/tech-stack.md#error-strategy-at-a-glance). This section covers how errors propagate through grt's module architecture.
 
 ### anyhow vs Typed Errors
 

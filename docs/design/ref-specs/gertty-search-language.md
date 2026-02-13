@@ -343,7 +343,7 @@ The following areas represent concrete differences between gertty's Python/PLY/S
   - Reuse of the AST for display, serialization, or fuzzy matching integration
   - Unit testing of the parser without a database
 
-**SQLite integration**: Gertty uses SQLAlchemy's expression language to build queries that are later compiled to SQL. grt will use `rusqlite` with raw SQL or a query builder. The subselect patterns gertty uses (for reviewer, commit, message, comment, label, and has:draft queries) will need to be translated to SQL string construction or a Rust query builder. Given that `rusqlite` does not have SQLAlchemy's expression composition, grt may benefit from a lightweight query builder or macro-based SQL construction.
+**SQLite integration**: Gertty uses SQLAlchemy's expression language to build queries that are later compiled to SQL. grt will use sqlx with compile-time checked SQL queries. The subselect patterns gertty uses (for reviewer, commit, message, comment, label, and has:draft queries) will need to be translated to parameterised SQL. sqlx's `query!` macro provides compile-time verification against the schema, replacing SQLAlchemy's runtime expression composition with static guarantees.
 
 **Fuzzy matching with nucleo-matcher**: Gertty only supports exact matching and regex (`^`-prefixed values). grt can integrate `nucleo-matcher` to provide fuzzy matching for interactive use (TUI search-as-you-type), while preserving exact and regex modes for scripted/CLI use. This would require the AST to distinguish between match modes (exact, regex, fuzzy) so the query executor can dispatch accordingly.
 
@@ -351,7 +351,7 @@ The following areas represent concrete differences between gertty's Python/PLY/S
 
 **Type safety for operators**: Gertty's operator handling is stringly-typed -- operator names are looked up in a dictionary, and `is:`/`has:` values are compared as raw strings with fallthrough to error. grt can use Rust enums for operator types and match exhaustively, ensuring at compile time that all operators are handled.
 
-**Regex handling**: Gertty delegates regex matching to a `func.matches()` function, presumably a SQLite UDF. grt can register a similar UDF with `rusqlite` using the `regex` crate, which provides significantly better regex performance than Python's `re` module. Alternatively, grt could compile regexes once and apply them in Rust-side filtering for operations that cannot be pushed down to SQLite.
+**Regex handling**: Gertty delegates regex matching to a `func.matches()` function, presumably a SQLite UDF. grt can register a similar SQLite UDF using the `regex` crate, which provides significantly better regex performance than Python's `re` module. Alternatively, grt could compile regexes once and apply them in Rust-side filtering for operations that cannot be pushed down to SQLite.
 
 **`limit:` implementation**: Gertty's `limit:` is a no-op because the architecture cannot thread it back to the query. grt's explicit AST can represent `limit` as a top-level query modifier rather than a filter predicate, allowing the query executor to apply `.limit()` to the final SQL query.
 

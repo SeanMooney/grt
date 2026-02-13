@@ -9,13 +9,13 @@ tech_stack[10]{layer,crate,role}:
   CLI,clap (derive),Subcommands type-safe args
   TUI,ratatui + crossterm,Terminal UI cross-platform input
   Database,sqlx + SQLite,Async embedded SQL compile-time checking
-  Git,git2,libgit2 bindings NoteDb access
+  Git,gix,Pure Rust git operations NoteDb access
   HTTP,reqwest,Gerrit REST API client
   Search,nucleo-matcher,fzf-quality fuzzy matching
   Logging,tracing,Structured logging with spans
-  Errors,anyhow,Ergonomic error propagation
+  Errors,anyhow + thiserror + miette,Typed and ergonomic error propagation
 
-tech_stack_detail: See docs/design/draft/tech-stack.md for full crate rationale
+tech_stack_detail: See docs/design/adopted/tech-stack.md for full crate rationale
 
 repo_layout: See docs/design/adopted/repo-layout.md
 

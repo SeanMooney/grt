@@ -401,7 +401,7 @@ Gertty uses a single sync thread that blocks on HTTP requests, combined with a p
 In grt, Tokio's async runtime opens several opportunities:
 
 - **Concurrent HTTP requests.** Multiple `SyncChangeTask` instances could run concurrently using `tokio::spawn` or `JoinSet`, bounded by a semaphore to control concurrency. This would dramatically improve sync throughput for initial sync and large projects.
-- **Non-blocking database access.** Using `tokio::task::spawn_blocking` for SQLite operations (rusqlite is synchronous) prevents database queries from blocking the async runtime. Alternatively, a dedicated database actor task with a channel-based interface would serialize writes without blocking callers.
+- **Non-blocking database access.** sqlx provides a native async SQLite driver, so database operations integrate directly with the async runtime without `spawn_blocking`. This eliminates the thread-pool overhead that would be required with a synchronous database library.
 - **Structured concurrency.** Task hierarchies (e.g., `SyncSubscribedProjectsTask` spawning multiple `SyncProjectTask` instances) map naturally to Tokio's `JoinSet` or structured task groups, with automatic cancellation propagation.
 
 ### Channel-based task queue vs Python Queue

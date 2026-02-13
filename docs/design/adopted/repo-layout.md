@@ -46,7 +46,6 @@ grt/
 │       ├── draft/                   # Design docs in progress
 │       │   ├── architecture.md
 │       │   ├── build-and-release.md
-│       │   ├── tech-stack.md
 │       │   ├── data-model.md
 │       │   ├── gerrit-client.md
 │       │   ├── cli-design.md
@@ -59,7 +58,8 @@ grt/
 │       ├── adopted/                 # Implemented and authoritative
 │       │   ├── repo-layout.md       # This file
 │       │   ├── rust-conventions.md
-│       │   └── patterns.md
+│       │   ├── patterns.md
+│       │   └── tech-stack.md
 │       ├── ref-specs/               # Prior-art analysis (descriptive)
 │       │   ├── README.md
 │       │   ├── gertty-data-model.md
@@ -110,9 +110,10 @@ crates/grt/src/
 ├── app.rs       App struct, orchestration, shared state
 ├── db.rs        SQLite schema, queries, migrations
 ├── gerrit.rs    Gerrit REST client, auth, response parsing
-├── git.rs       git2 operations, cherry-pick, status
+├── git.rs       gix operations, cherry-pick, status
 ├── notedb.rs    NoteDb ref parsing (Gerrit metadata in git)
 ├── fuzzy.rs     nucleo-matcher integration, search API
+├── config.rs    Config struct, TOML loading, XDG paths
 └── tui.rs       ratatui event loop, views, rendering
 ```
 

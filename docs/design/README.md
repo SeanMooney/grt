@@ -20,6 +20,7 @@ A doc moves from draft to adopted via `git mv` when its design is implemented. S
 | `adopted/repo-layout.md` | Repository directory structure — single source of truth | Adopted |
 | `adopted/rust-conventions.md` | Rust coding standards | Adopted |
 | `adopted/patterns.md` | Pattern library (grows over time) | Adopted |
+| `adopted/tech-stack.md` | Technology selections, crate rationale, dependency decisions | Adopted |
 | **Reference Specs** | | |
 | `ref-specs/gertty-data-model.md` | Gertty SQLAlchemy schema: 18+ tables, relationships, indices | Complete |
 | `ref-specs/gertty-sync-system.md` | Gertty sync: priority queue, 30+ task types, offline handling | Complete |
@@ -31,14 +32,13 @@ A doc moves from draft to adopted via `git mv` when its design is implemented. S
 | **Design Docs (Draft)** | | |
 | `draft/architecture.md` | grt system design, module boundaries, data flow | Draft |
 | `draft/build-and-release.md` | Build, CI, cross-compilation, SBOM, signing, release | Draft |
-| `draft/tech-stack.md` | Technology selections and full architecture spec | Draft |
 | `draft/data-model.md` | Unified SQLite schema (from gertty + extensions) | Stub |
 | `draft/gerrit-client.md` | REST API client, auth, sync endpoints | Stub |
 | `draft/cli-design.md` | clap command tree, flags, output formats | Stub |
 | `draft/tui-design.md` | ratatui views, navigation, event loop | Stub |
 | `draft/search-engine.md` | Query language + fuzzy search design | Stub |
 | `draft/config-system.md` | TOML config, layered config, multi-server | Stub |
-| `draft/git-operations.md` | git2 ops, NoteDb reading, hook management | Stub |
+| `draft/git-operations.md` | gix ops, NoteDb reading, hook management | Stub |
 | `draft/sync-engine.md` | Async sync, task scheduling, offline mode | Stub |
 | `draft/error-handling.md` | Error types, recovery, user-facing messages | Stub |
 | **Decisions** | | |
@@ -78,7 +78,7 @@ How reference project analysis feeds into grt design.
 | Git operations | git-review-workflow → draft/git-operations |
 | Configuration | gertty-config-and-ui → draft/config-system |
 | Architecture | ca-bhfuil-patterns → draft/architecture |
-| Build & release | draft/build-and-release → draft/tech-stack (crate context) |
+| Build & release | draft/build-and-release → adopted/tech-stack (crate context) |
 
 ## Relationships
 
@@ -96,6 +96,7 @@ graph TD
 
     subgraph "Design Docs (prescriptive)"
         ARCH[architecture]
+        TS[tech-stack]
         DM[data-model]
         GC[gerrit-client]
         CLI[cli-design]
@@ -119,6 +120,9 @@ graph TD
     GRW --> GO
     GRA --> GC
     CBP --> ARCH
+
+    TS --> ARCH
+    TS --> BR
 
     ARCH --> DM
     ARCH --> GC

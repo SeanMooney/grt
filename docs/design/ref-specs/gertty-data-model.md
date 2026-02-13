@@ -588,7 +588,7 @@ The initial schema was minimal: project, change, revision, message, comment, lab
 
 ### Type System: Rust/SQLite vs Python/SQLAlchemy
 
-Gertty uses SQLAlchemy's type abstraction (`Integer`, `String(255)`, `Boolean`, `DateTime`, `Text`), which maps to SQLite's dynamic type system at runtime. grt will use `rusqlite` or `sqlx` with explicit SQLite types:
+Gertty uses SQLAlchemy's type abstraction (`Integer`, `String(255)`, `Boolean`, `DateTime`, `Text`), which maps to SQLite's dynamic type system at runtime. grt will use sqlx with explicit SQLite types:
 
 | SQLAlchemy Type  | SQLite Storage | Rust Type             |
 | ---------------- | -------------- | --------------------- |
@@ -610,7 +610,7 @@ Gertty's imperative mapper provides automatic relationship loading, dirty tracki
 
 ### Compile-Time Checking
 
-If grt uses `sqlx`, queries can be checked against the schema at compile time. This replaces SQLAlchemy's runtime type checking and provides stronger guarantees. If grt uses `rusqlite`, queries are string-based but typed at the extraction point via `row.get::<_, T>(index)`.
+grt uses sqlx, so queries are checked against the schema at compile time. This replaces SQLAlchemy's runtime type checking and provides stronger guarantees.
 
 ### Schema Simplifications
 
