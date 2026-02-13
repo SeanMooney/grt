@@ -74,17 +74,127 @@ pub fn propagate_hook_to_submodules(work_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Fetch a commit-msg hook from a remote URL.
+/// Parse an SSH/SCP-style URL into (user@host, optional port, path).
 ///
-/// Currently a stub — prints an informative message.
-/// TODO: implement HTTP and SCP hook download (git-review cmd.py:395-440)
-pub fn fetch_remote_hook(url: &str, hooks_dir: &Path) -> Result<()> {
-    eprintln!(
-        "Remote hook download not yet implemented. \
-         Please manually download the hook from {} and place it in {}",
-        url,
-        hooks_dir.display()
-    );
+/// Supports:
+/// - `ssh://[user@]host[:port]/path`
+/// - `user@host:path` (SCP syntax)
+pub fn parse_ssh_url(url: &str) -> Result<(String, Option<u16>, String)> {
+    // Try ssh:// URL form first
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        let (userhost, path) = rest
+            .split_once('/')
+            .context("SSH URL has no path component")?;
+
+        let (userhost, port) = if let Some((uh, port_str)) = userhost.rsplit_once(':') {
+            let port: u16 = port_str.parse().context("parsing SSH port from URL")?;
+            (uh.to_string(), Some(port))
+        } else {
+            (userhost.to_string(), None)
+        };
+
+        return Ok((userhost, port, format!("/{path}")));
+    }
+
+    // Try SCP-style: user@host:path
+    if let Some((userhost, path)) = url.split_once(':') {
+        if !path.starts_with("//") && userhost.contains('@') {
+            return Ok((userhost.to_string(), None, path.to_string()));
+        }
+    }
+
+    anyhow::bail!("cannot parse SSH URL: {url}");
+}
+
+/// Fetch a commit-msg hook from a remote Gerrit server.
+///
+/// Tries HTTP(S) download first (`<base_url>/tools/hooks/commit-msg`).
+/// Falls back to SCP for SSH-based URLs.
+pub async fn fetch_remote_hook(url: &str, hooks_dir: &Path) -> Result<()> {
+    let hook_path = hooks_dir.join("commit-msg");
+
+    // Create hooks directory if needed
+    if !hooks_dir.exists() {
+        std::fs::create_dir_all(hooks_dir).context("creating hooks directory")?;
+    }
+
+    if url.starts_with("http://") || url.starts_with("https://") {
+        fetch_hook_http(url, &hook_path).await?;
+    } else {
+        fetch_hook_scp(url, &hook_path)?;
+    }
+
+    // Set executable permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::metadata(&hook_path).context("reading hook file metadata")?;
+        let mode = metadata.permissions().mode();
+        let exec_bits = (mode & 0o444) >> 2;
+        let new_mode = mode | exec_bits;
+        let perms = std::fs::Permissions::from_mode(new_mode);
+        std::fs::set_permissions(&hook_path, perms).context("setting hook permissions")?;
+    }
+
+    eprintln!("  commit-msg hook: downloaded to {}", hook_path.display());
+    Ok(())
+}
+
+/// Download hook via HTTP(S).
+async fn fetch_hook_http(base_url: &str, hook_path: &Path) -> Result<()> {
+    let hook_url = format!("{}/tools/hooks/commit-msg", base_url.trim_end_matches('/'));
+    tracing::info!("Downloading commit-msg hook from {hook_url}...");
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("creating HTTP client for hook download")?;
+
+    let response = client
+        .get(&hook_url)
+        .send()
+        .await
+        .context("downloading commit-msg hook")?;
+
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "failed to download commit-msg hook: HTTP {}",
+            response.status()
+        );
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .context("reading hook response body")?;
+    std::fs::write(hook_path, &bytes).context("writing downloaded commit-msg hook")?;
+
+    Ok(())
+}
+
+/// Download hook via SCP.
+fn fetch_hook_scp(url: &str, hook_path: &Path) -> Result<()> {
+    let (userhost, port, _path) = parse_ssh_url(url)?;
+    let source = format!("{userhost}:hooks/commit-msg");
+
+    tracing::info!("Downloading commit-msg hook via SCP from {source}...");
+
+    let mut cmd = std::process::Command::new("scp");
+    // Use -O for legacy SCP protocol (better compatibility)
+    cmd.arg("-O");
+    if let Some(p) = port {
+        cmd.args(["-P", &p.to_string()]);
+    }
+    cmd.arg(&source);
+    cmd.arg(hook_path);
+
+    let output = cmd.output().context("running scp to download hook")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("scp failed: {}", stderr.trim());
+    }
+
     Ok(())
 }
 
@@ -162,11 +272,37 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    // === parse_ssh_url tests ===
+
     #[test]
-    fn fetch_remote_hook_stub_succeeds() {
-        let dir = tempfile::tempdir().unwrap();
-        let hooks_dir = dir.path().join("hooks");
-        let result = fetch_remote_hook("https://example.com/hook", &hooks_dir);
-        assert!(result.is_ok());
+    fn parse_ssh_url_standard() {
+        let (userhost, port, path) =
+            parse_ssh_url("ssh://alice@review.example.com:29418/project").unwrap();
+        assert_eq!(userhost, "alice@review.example.com");
+        assert_eq!(port, Some(29418));
+        assert_eq!(path, "/project");
+    }
+
+    #[test]
+    fn parse_ssh_url_no_port() {
+        let (userhost, port, path) =
+            parse_ssh_url("ssh://alice@review.example.com/project").unwrap();
+        assert_eq!(userhost, "alice@review.example.com");
+        assert_eq!(port, None);
+        assert_eq!(path, "/project");
+    }
+
+    #[test]
+    fn parse_ssh_url_scp_style() {
+        let (userhost, port, path) = parse_ssh_url("git@review.example.com:project/repo").unwrap();
+        assert_eq!(userhost, "git@review.example.com");
+        assert_eq!(port, None);
+        assert_eq!(path, "project/repo");
+    }
+
+    #[test]
+    fn parse_ssh_url_invalid() {
+        let result = parse_ssh_url("https://example.com/project");
+        assert!(result.is_err());
     }
 }

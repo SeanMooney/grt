@@ -68,7 +68,10 @@ impl App {
     ///
     /// Refuses to send credentials over plain HTTP unless `--insecure` was passed.
     pub fn authenticate(&mut self) -> Result<()> {
-        if self.config.scheme != "https" && !self.insecure {
+        // The REST API always uses HTTPS unless scheme is explicitly "http".
+        // SSH scheme (the default) maps to HTTPS for API requests, so only
+        // block when scheme is literally "http" without --insecure.
+        if self.config.scheme == "http" && !self.insecure {
             anyhow::bail!(
                 "refusing to send credentials over plain HTTP (scheme: {}). \
                  Use --insecure to override, or switch to HTTPS",

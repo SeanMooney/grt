@@ -37,11 +37,53 @@ impl GerritConfig {
     /// Uses `http_port` if explicitly set, otherwise the standard port for the scheme.
     /// The `.gitreview` port (SSH) is intentionally not used here.
     pub fn gerrit_base_url(&self) -> Result<Url> {
+        // REST API always uses HTTPS regardless of git transport scheme.
+        // Only use HTTP if explicitly configured (scheme = "http").
+        let api_scheme = if self.scheme == "http" {
+            "http"
+        } else {
+            "https"
+        };
         let url_str = match self.http_port {
-            Some(port) => format!("{}://{}:{}", self.scheme, self.host, port),
-            None => format!("{}://{}", self.scheme, self.host),
+            Some(port) => format!("{api_scheme}://{}:{}", self.host, port),
+            None => format!("{api_scheme}://{}", self.host),
         };
         Url::parse(&url_str).context("constructing Gerrit base URL")
+    }
+
+    /// Build a remote URL from the config fields.
+    ///
+    /// Format: `scheme://[username@]host[:port]/project`
+    ///
+    /// Uses `ssh_port` for SSH scheme, `http_port` for HTTP(S) scheme.
+    /// Includes `username` in the URL when available (required for SSH).
+    pub fn make_remote_url(&self) -> String {
+        let mut url = format!("{}://", self.scheme);
+
+        if let Some(ref username) = self.username {
+            url.push_str(username);
+            url.push('@');
+        }
+
+        url.push_str(&self.host);
+
+        match self.scheme.as_str() {
+            "ssh" => {
+                if let Some(port) = self.ssh_port {
+                    url.push_str(&format!(":{port}"));
+                }
+            }
+            _ => {
+                if let Some(port) = self.http_port {
+                    url.push_str(&format!(":{port}"));
+                }
+            }
+        }
+
+        url.push('/');
+        url.push_str(&self.project);
+
+        url
     }
 }
 
@@ -63,6 +105,100 @@ impl Default for GerritConfig {
             username: None,
         }
     }
+}
+
+/// URL rewrite rules parsed from `git config --list`.
+///
+/// Mirrors git's `url.<base>.insteadOf` and `url.<base>.pushInsteadOf` config.
+#[derive(Debug, Default)]
+pub struct UrlRewrites {
+    /// `url.<new>.insteadOf = <old>` — applies to both fetch and push.
+    pub instead_of: Vec<(String, String)>,
+    /// `url.<new>.pushInsteadOf = <old>` — applies only to push URLs.
+    pub push_instead_of: Vec<(String, String)>,
+}
+
+/// Parse `git config --list` output for URL rewrite rules.
+///
+/// Looks for entries matching:
+/// - `url.<base>.insteadof=<prefix>` (case-insensitive key)
+/// - `url.<base>.pushinsteadof=<prefix>` (case-insensitive key)
+pub fn populate_rewrites(config_list: &str) -> UrlRewrites {
+    let mut rewrites = UrlRewrites::default();
+
+    for line in config_list.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let lower_key = key.to_lowercase();
+
+        if let Some(rest) = lower_key.strip_prefix("url.") {
+            if let Some(base) = rest.strip_suffix(".insteadof") {
+                // Recover original-case base from the key
+                let original_base = &key[4..4 + base.len()];
+                rewrites
+                    .instead_of
+                    .push((value.to_string(), original_base.to_string()));
+            } else if let Some(base) = rest.strip_suffix(".pushinsteadof") {
+                let original_base = &key[4..4 + base.len()];
+                rewrites
+                    .push_instead_of
+                    .push((value.to_string(), original_base.to_string()));
+            }
+        }
+    }
+
+    rewrites
+}
+
+/// Apply URL rewrite rules using longest-match semantics.
+///
+/// If `for_push` is true, `pushInsteadOf` rules take precedence over `insteadOf`.
+/// Otherwise only `insteadOf` rules are applied.
+pub fn alias_url(url: &str, rewrites: &UrlRewrites, for_push: bool) -> String {
+    // Try pushInsteadOf first when pushing
+    if for_push {
+        if let Some(result) = longest_match_replace(url, &rewrites.push_instead_of) {
+            return result;
+        }
+    }
+
+    // Fall back to insteadOf
+    if let Some(result) = longest_match_replace(url, &rewrites.instead_of) {
+        return result;
+    }
+
+    url.to_string()
+}
+
+/// Find the longest matching prefix and replace it.
+fn longest_match_replace(url: &str, rules: &[(String, String)]) -> Option<String> {
+    let mut best_match: Option<(&str, &str)> = None;
+    let mut best_len = 0;
+
+    for (prefix, replacement) in rules {
+        if url.starts_with(prefix.as_str()) && prefix.len() > best_len {
+            best_len = prefix.len();
+            best_match = Some((prefix.as_str(), replacement.as_str()));
+        }
+    }
+
+    best_match.map(|(prefix, replacement)| format!("{}{}", replacement, &url[prefix.len()..]))
+}
+
+/// Resolve the effective remote URL, applying URL rewrites.
+///
+/// Tries `remote.get-url --push` first, then `remote.get-url`, applying rewrites.
+pub fn get_remote_url(
+    remote: &str,
+    rewrites: &UrlRewrites,
+    git_remote_url: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if let Some(url) = git_remote_url(remote) {
+        let rewritten = alias_url(&url, rewrites, true);
+        return Some(rewritten);
+    }
+    None
 }
 
 /// Values that can be overridden via CLI flags.
@@ -341,7 +477,8 @@ pub fn load_config(
         config.ssh_port = Some(29418);
     }
 
-    // TODO: implement insteadOf / pushInsteadOf URL rewriting (git-review cmd.py:527-604)
+    // URL rewriting: insteadOf / pushInsteadOf is handled at the call site
+    // via populate_rewrites() + alias_url() since it needs git config --list output.
 
     Ok(config)
 }
@@ -486,6 +623,53 @@ project=my/project
             url.as_str(),
             "https://review.example.com/",
             "SSH port should not appear in REST API URL"
+        );
+    }
+
+    #[test]
+    fn gerrit_base_url_ssh_scheme_uses_https() {
+        let config = GerritConfig {
+            host: "review.opendev.org".into(),
+            scheme: "ssh".into(),
+            ssh_port: Some(29418),
+            ..Default::default()
+        };
+        let url = config.gerrit_base_url().unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://review.opendev.org/",
+            "SSH transport scheme should produce HTTPS REST API URL"
+        );
+    }
+
+    #[test]
+    fn gerrit_base_url_default_scheme_uses_https() {
+        let config = GerritConfig {
+            host: "review.opendev.org".into(),
+            ..Default::default()
+        };
+        assert_eq!(config.scheme, "ssh", "default scheme should be ssh");
+        let url = config.gerrit_base_url().unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://review.opendev.org/",
+            "Default config should produce HTTPS REST API URL"
+        );
+    }
+
+    #[test]
+    fn gerrit_base_url_http_scheme_preserved() {
+        let config = GerritConfig {
+            host: "localhost".into(),
+            scheme: "http".into(),
+            http_port: Some(8080),
+            ..Default::default()
+        };
+        let url = config.gerrit_base_url().unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://localhost:8080/",
+            "Explicit HTTP scheme should be preserved for dev/insecure setups"
         );
     }
 
@@ -898,5 +1082,193 @@ DefaultBranch=develop
         )
         .unwrap();
         assert_eq!(config.username.as_deref(), Some("testuser"));
+    }
+
+    // === URL rewriting tests ===
+
+    #[test]
+    fn populate_rewrites_insteadof() {
+        let config_list = "url.ssh://git@github.com/.insteadof=https://github.com/\n";
+        let rewrites = populate_rewrites(config_list);
+        assert_eq!(rewrites.instead_of.len(), 1);
+        assert_eq!(rewrites.instead_of[0].0, "https://github.com/");
+        assert_eq!(rewrites.instead_of[0].1, "ssh://git@github.com/");
+    }
+
+    #[test]
+    fn populate_rewrites_pushinsteadof() {
+        let config_list = "url.ssh://git@github.com/.pushinsteadof=https://github.com/\n";
+        let rewrites = populate_rewrites(config_list);
+        assert_eq!(rewrites.push_instead_of.len(), 1);
+        assert_eq!(rewrites.push_instead_of[0].0, "https://github.com/");
+        assert_eq!(rewrites.push_instead_of[0].1, "ssh://git@github.com/");
+    }
+
+    #[test]
+    fn populate_rewrites_empty() {
+        let rewrites = populate_rewrites("user.name=Test\nuser.email=test@test.com\n");
+        assert!(rewrites.instead_of.is_empty());
+        assert!(rewrites.push_instead_of.is_empty());
+    }
+
+    #[test]
+    fn alias_url_insteadof_applied() {
+        let rewrites = UrlRewrites {
+            instead_of: vec![(
+                "https://github.com/".to_string(),
+                "ssh://git@github.com/".to_string(),
+            )],
+            push_instead_of: vec![],
+        };
+        assert_eq!(
+            alias_url("https://github.com/user/repo", &rewrites, false),
+            "ssh://git@github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn alias_url_longest_match() {
+        let rewrites = UrlRewrites {
+            instead_of: vec![
+                ("https://".to_string(), "http://".to_string()),
+                (
+                    "https://github.com/".to_string(),
+                    "ssh://git@github.com/".to_string(),
+                ),
+            ],
+            push_instead_of: vec![],
+        };
+        // Longest match should win
+        assert_eq!(
+            alias_url("https://github.com/user/repo", &rewrites, false),
+            "ssh://git@github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn alias_url_push_takes_precedence() {
+        let rewrites = UrlRewrites {
+            instead_of: vec![(
+                "https://github.com/".to_string(),
+                "git://github.com/".to_string(),
+            )],
+            push_instead_of: vec![(
+                "https://github.com/".to_string(),
+                "ssh://git@github.com/".to_string(),
+            )],
+        };
+        // For push, pushInsteadOf should take precedence
+        assert_eq!(
+            alias_url("https://github.com/user/repo", &rewrites, true),
+            "ssh://git@github.com/user/repo"
+        );
+        // For fetch, only insteadOf should apply
+        assert_eq!(
+            alias_url("https://github.com/user/repo", &rewrites, false),
+            "git://github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn alias_url_no_match() {
+        let rewrites = UrlRewrites {
+            instead_of: vec![(
+                "https://github.com/".to_string(),
+                "ssh://git@github.com/".to_string(),
+            )],
+            push_instead_of: vec![],
+        };
+        assert_eq!(
+            alias_url("https://gitlab.com/user/repo", &rewrites, false),
+            "https://gitlab.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn get_remote_url_with_rewrites() {
+        let rewrites = UrlRewrites {
+            instead_of: vec![],
+            push_instead_of: vec![(
+                "https://review.example.com/".to_string(),
+                "ssh://review.example.com:29418/".to_string(),
+            )],
+        };
+        let url = get_remote_url("gerrit", &rewrites, |_remote| {
+            Some("https://review.example.com/project".to_string())
+        });
+        assert_eq!(
+            url.as_deref(),
+            Some("ssh://review.example.com:29418/project")
+        );
+    }
+
+    #[test]
+    fn get_remote_url_no_remote() {
+        let rewrites = UrlRewrites::default();
+        let url = get_remote_url("gerrit", &rewrites, |_| None);
+        assert_eq!(url, None);
+    }
+
+    // === make_remote_url tests ===
+
+    #[test]
+    fn make_remote_url_ssh_with_username() {
+        let config = GerritConfig {
+            host: "review.example.com".into(),
+            scheme: "ssh".into(),
+            ssh_port: Some(29418),
+            project: "openstack/nova".into(),
+            username: Some("alice".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.make_remote_url(),
+            "ssh://alice@review.example.com:29418/openstack/nova"
+        );
+    }
+
+    #[test]
+    fn make_remote_url_https_no_username() {
+        let config = GerritConfig {
+            host: "review.example.com".into(),
+            scheme: "https".into(),
+            project: "openstack/nova".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.make_remote_url(),
+            "https://review.example.com/openstack/nova"
+        );
+    }
+
+    #[test]
+    fn make_remote_url_https_with_port() {
+        let config = GerritConfig {
+            host: "review.example.com".into(),
+            scheme: "https".into(),
+            http_port: Some(8443),
+            project: "my/project".into(),
+            username: Some("bob".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.make_remote_url(),
+            "https://bob@review.example.com:8443/my/project"
+        );
+    }
+
+    #[test]
+    fn make_remote_url_ssh_no_port() {
+        let config = GerritConfig {
+            host: "review.example.com".into(),
+            scheme: "ssh".into(),
+            ssh_port: None,
+            project: "my/project".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            config.make_remote_url(),
+            "ssh://review.example.com/my/project"
+        );
     }
 }

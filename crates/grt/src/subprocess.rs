@@ -81,6 +81,33 @@ pub fn count_unpushed_commits(remote: &str, branch: &str, work_dir: &Path) -> Re
     }
 }
 
+/// List unpushed commits between HEAD and a remote tracking branch.
+///
+/// Returns the `git log --oneline --decorate` output as a string, or an empty
+/// string if no unpushed commits exist.
+pub fn list_unpushed_commits(remote: &str, branch: &str, work_dir: &Path) -> Result<String> {
+    let remote_ref = format!("remotes/{}/{}", remote, branch);
+    let output = git_output(
+        &[
+            "log",
+            "--oneline",
+            "--decorate",
+            "HEAD",
+            "--not",
+            &remote_ref,
+        ],
+        work_dir,
+    );
+
+    match output {
+        Ok(text) => Ok(text),
+        Err(_) => {
+            // Remote branch may not exist yet; show all commits
+            git_output(&["log", "--oneline", "--decorate"], work_dir)
+        }
+    }
+}
+
 /// Fetch a specific ref from a remote.
 pub fn git_fetch_ref(remote: &str, git_ref: &str, work_dir: &Path) -> Result<()> {
     git_exec(&["fetch", remote, git_ref], work_dir)
@@ -260,6 +287,67 @@ pub fn git_remote_update(remote: &str, work_dir: &Path) -> Result<()> {
     git_exec(&["remote", "update", remote], work_dir)
 }
 
+/// Check if the working tree is clean (no staged or unstaged changes, ignoring submodules).
+pub fn check_worktree_clean(work_dir: &Path) -> Result<bool> {
+    let unstaged = git_command(&["diff", "--ignore-submodules", "--quiet"], work_dir)
+        .status()
+        .context("checking for unstaged changes")?;
+    if !unstaged.success() {
+        return Ok(false);
+    }
+
+    let staged = git_command(
+        &["diff", "--cached", "--ignore-submodules", "--quiet"],
+        work_dir,
+    )
+    .status()
+    .context("checking for staged changes")?;
+    Ok(staged.success())
+}
+
+/// Check if a remote tracking branch exists.
+pub fn check_remote_branch_exists(remote: &str, branch: &str, work_dir: &Path) -> bool {
+    let refname = format!("refs/remotes/{remote}/{branch}");
+    git_command(&["show-ref", "--quiet", "--verify", &refname], work_dir)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Return the SHA of HEAD.
+pub fn git_rev_parse_head(work_dir: &Path) -> Result<String> {
+    git_output(&["rev-parse", "HEAD"], work_dir)
+}
+
+/// Rebase the current branch onto a remote branch.
+///
+/// Uses `--rebase-merges` and sets `GIT_EDITOR=true` to avoid interactive prompts.
+pub fn git_rebase(remote_branch: &str, work_dir: &Path) -> Result<()> {
+    let status = git_command(&["rebase", "--rebase-merges", remote_branch], work_dir)
+        .env("GIT_EDITOR", "true")
+        .status()
+        .context("running git rebase")?;
+
+    if !status.success() {
+        anyhow::bail!(
+            "git rebase {} failed (exit {})",
+            remote_branch,
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
+}
+
+/// Abort an in-progress rebase.
+pub fn git_rebase_abort(work_dir: &Path) -> Result<()> {
+    git_exec(&["rebase", "--abort"], work_dir)
+}
+
+/// Hard-reset to a specific commit.
+pub fn git_reset_hard(commit: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["reset", "--hard", commit], work_dir)
+}
+
 /// Strip the Change-Id from HEAD and amend the commit.
 ///
 /// The commit-msg hook will generate a new Change-Id on amend.
@@ -282,6 +370,11 @@ pub fn git_fetch_ref_sha(remote: &str, git_ref: &str, work_dir: &Path) -> Result
 /// Diff two commits, inheriting stdout/stderr for interactive output.
 pub fn git_diff(commit_a: &str, commit_b: &str, work_dir: &Path) -> Result<()> {
     git_exec(&["diff", commit_a, commit_b], work_dir)
+}
+
+/// Return the full `git config --list` output for URL rewrite parsing.
+pub fn git_config_list(work_dir: &Path) -> Result<String> {
+    git_output(&["config", "--list"], work_dir)
 }
 
 /// Set the upstream tracking branch for a local branch.
@@ -308,6 +401,16 @@ pub fn git_checkout_or_reset_branch(
                 .context("resetting branch to new start point")
         }
     }
+}
+
+/// Add a new remote and fetch its refs.
+pub fn git_remote_add(remote: &str, url: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["remote", "add", "-f", remote, url], work_dir)
+}
+
+/// Set the push URL for a remote.
+pub fn git_remote_set_push_url(remote: &str, url: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["remote", "set-url", "--push", remote, url], work_dir)
 }
 
 /// Check if a git remote exists and return its URL.

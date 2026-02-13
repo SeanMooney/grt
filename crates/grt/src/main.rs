@@ -14,6 +14,7 @@ use grt::export::{self, ExportArgs};
 use grt::gerrit::GerritError;
 use grt::hook;
 use grt::push::{self, ChangeIdStatus, PushOptions};
+use grt::rebase;
 use grt::review::{self, ReviewArgs};
 use grt::subprocess;
 
@@ -150,6 +151,14 @@ struct PushArgs {
     #[arg(long)]
     no_rebase: bool,
 
+    /// Force rebase before pushing
+    #[arg(long)]
+    force_rebase: bool,
+
+    /// Keep rebase state on failure (don't abort)
+    #[arg(long)]
+    keep_rebase: bool,
+
     /// Show what would be pushed without pushing
     #[arg(long)]
     dry_run: bool,
@@ -202,6 +211,10 @@ struct SetupArgs {
     /// Force reinstall of commit-msg hook even if it exists
     #[arg(long)]
     force_hook: bool,
+
+    /// Download hook from remote Gerrit server instead of using vendored copy
+    #[arg(long)]
+    remote_hook: bool,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -283,6 +296,50 @@ fn cmd_completions(shell: clap_complete::Shell) {
     clap_complete::generate(shell, &mut cmd, "grt", &mut std::io::stdout());
 }
 
+/// Check if the configured remote exists, and create it if possible.
+///
+/// - If remote exists with a tracking branch: no-op
+/// - If remote exists but no tracking branch: run `git remote update`
+/// - If remote doesn't exist and config has enough info: create it
+fn check_and_create_remote(app: &App) -> Result<()> {
+    let remote = &app.config.remote;
+    let root = app.git.root()?;
+
+    match subprocess::check_remote_exists(remote, &root)? {
+        Some(_url) => {
+            // Remote exists — check if tracking branch exists
+            let tracking_ref = format!("refs/remotes/{}/{}", remote, app.config.branch);
+            let has_tracking =
+                subprocess::git_output(&["show-ref", "--verify", "--quiet", &tracking_ref], &root)
+                    .is_ok();
+
+            if !has_tracking {
+                tracing::info!("Remote '{remote}' exists but has no tracking branch, updating...");
+                subprocess::git_remote_update(remote, &root)?;
+            }
+        }
+        None => {
+            // Remote doesn't exist — try to create from config
+            if app.config.host.is_empty() {
+                return Ok(()); // Not enough config to auto-create
+            }
+
+            let url = app.config.make_remote_url();
+            tracing::info!("Creating remote '{remote}' with URL {url}...");
+            subprocess::git_remote_add(remote, &url, &root)?;
+
+            // Set push URL if usepushurl is configured
+            if app.config.usepushurl {
+                // For push URL, use HTTPS scheme if available
+                let push_url = app.config.make_remote_url();
+                subprocess::git_remote_set_push_url(remote, &push_url, &root)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let argv0 = std::env::args().next().unwrap_or_default();
@@ -346,6 +403,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
             SetupArgs {
                 remote: args.remote.clone(),
                 force_hook: false,
+                remote_hook: args.remote_hook,
             },
             insecure,
         )
@@ -356,14 +414,22 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         // Fall through to finish logic below
     }
 
+    // Warn about flags that are parsed but not yet fully implemented
+    review::warn_unused_flags(&args);
+
+    // Create a single App instance for all mode dispatches
+    let cli_overrides = CliOverrides {
+        remote: args.remote.clone(),
+        insecure,
+        ..Default::default()
+    };
+    let mut app = App::new(work_dir, &cli_overrides)?;
+
+    // Ensure remote exists (auto-create if possible)
+    check_and_create_remote(&app)?;
+
     // Resolve branch via --track if no explicit branch given (before all mode dispatches)
     let branch = if args.track && args.branch.is_none() {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let app = App::new(work_dir, &cli_overrides)?;
         match app.git.upstream_branch()? {
             Some((_remote, merge_branch)) => {
                 tracing::debug!("--track resolved upstream branch to {}", merge_branch);
@@ -377,74 +443,32 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
 
     // Download mode
     if let Some(ref change_arg) = args.download {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let mut app = App::new(work_dir, &cli_overrides)?;
         return review::cmd_review_download(&mut app, change_arg).await;
     }
 
     // Cherry-pick modes
     if let Some(ref change_arg) = args.cherrypick {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let mut app = App::new(work_dir, &cli_overrides)?;
         return review::cmd_review_cherrypick(&mut app, change_arg).await;
     }
     if let Some(ref change_arg) = args.cherrypickindicate {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let mut app = App::new(work_dir, &cli_overrides)?;
         return review::cmd_review_cherrypickindicate(&mut app, change_arg).await;
     }
     if let Some(ref change_arg) = args.cherrypickonly {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let mut app = App::new(work_dir, &cli_overrides)?;
         return review::cmd_review_cherrypickonly(&mut app, change_arg).await;
     }
 
     // Compare mode
     if let Some(ref compare_arg) = args.compare {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let mut app = App::new(work_dir, &cli_overrides)?;
         return review::cmd_review_compare(&mut app, compare_arg).await;
     }
 
     // List mode
     if args.list > 0 {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let app = App::new(work_dir, &cli_overrides)?;
         return review::cmd_review_list(&app, branch.as_deref(), args.list >= 2).await;
     }
 
     // Pre-push: --update runs `git remote update`
     if args.update {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let app = App::new(work_dir, &cli_overrides)?;
         let remote = args.remote.as_deref().unwrap_or(&app.config.remote);
         let root = app.git.root()?;
         tracing::info!("Updating remote {remote}...");
@@ -453,31 +477,14 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
 
     // Pre-push: --new-changeid strips Change-Id and amends
     if args.new_changeid {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let app = App::new(work_dir, &cli_overrides)?;
         let root = app.git.root()?;
         tracing::info!("Regenerating Change-Id...");
         subprocess::git_regenerate_changeid(&root)?;
     }
 
-    // Pre-push: --force-rebase warning (Task H2)
-    if args.force_rebase {
-        tracing::warn!("--force-rebase: pre-push rebase not yet implemented");
-    }
-
     // Capture current branch name for --finish (only when not dry-run) (Task B2)
     let current_branch_name = if args.finish && !args.dry_run {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let app = App::new(work_dir, &cli_overrides)?;
-        Some(app.git.current_branch()?)
+        Some(app.git.current_branch_or_default(&app.config.branch))
     } else {
         None
     };
@@ -486,17 +493,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
     let topic = if args.no_topic {
         None
     } else {
-        args.topic.clone().or_else(|| {
-            // Default to current branch name
-            let cli_overrides = CliOverrides {
-                remote: args.remote.clone(),
-                insecure,
-                ..Default::default()
-            };
-            App::new(work_dir, &cli_overrides)
-                .ok()
-                .and_then(|app| app.git.current_branch().ok())
-        })
+        args.topic.clone().or_else(|| app.git.current_branch().ok())
     };
 
     // Default mode: push
@@ -516,6 +513,8 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
             message: args.message,
             notify: args.notify.map(|n| n.to_string()),
             no_rebase: args.no_rebase,
+            force_rebase: args.force_rebase,
+            keep_rebase: args.keep_rebase,
             dry_run: args.dry_run,
             yes: args.yes,
             new_changeid: false, // already handled above
@@ -528,12 +527,6 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
     // Post-push: --finish checks out default branch and deletes topic branch (Task B2)
     if let Some(topic_branch) = current_branch_name {
         if !args.dry_run {
-            let cli_overrides = CliOverrides {
-                remote: args.remote,
-                insecure,
-                ..Default::default()
-            };
-            let app = App::new(work_dir, &cli_overrides)?;
             let default_branch = app.config.branch.clone();
             let root = app.git.root()?;
             tracing::info!(
@@ -559,10 +552,18 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     let app = App::new(work_dir, &cli_overrides)?;
     let root = app.git.root()?;
 
+    // Ensure remote exists (auto-create if possible)
+    check_and_create_remote(&app)?;
+
     // Ensure commit-msg hook is installed
     let hooks_dir = app.git.hooks_dir()?;
     hook::ensure_hook_installed(&hooks_dir)?;
     debug!("commit-msg hook verified at {:?}", hooks_dir);
+
+    // Propagate hook to submodules (non-fatal)
+    if let Err(e) = hook::propagate_hook_to_submodules(&root) {
+        tracing::warn!("failed to propagate hook to submodules: {e}");
+    }
 
     let branch = args.branch.unwrap_or_else(|| app.config.branch.clone());
     let remote = args.remote.unwrap_or_else(|| app.config.remote.clone());
@@ -585,6 +586,18 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
         }
     }
 
+    // Pre-push rebase
+    let should_rebase = !args.no_rebase && (app.config.default_rebase || args.force_rebase);
+    let rebase_orig_head = if should_rebase {
+        match rebase::rebase_changes(&remote, &branch, args.keep_rebase, &root)? {
+            rebase::RebaseResult::Success { orig_head } => Some(orig_head),
+            rebase::RebaseResult::Failed => return Ok(()),
+            rebase::RebaseResult::Skipped => None,
+        }
+    } else {
+        None
+    };
+
     // Count unpushed commits
     let count = subprocess::count_unpushed_commits(&remote, &branch, &root)?;
     if count == 0 {
@@ -593,7 +606,10 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     }
 
     if count > 1 && !args.yes {
-        eprintln!("About to push {count} commit(s) to {remote}/{branch}. Continue? [y/N] ");
+        let commits = subprocess::list_unpushed_commits(&remote, &branch, &root)?;
+        eprintln!(
+            "You are about to submit multiple commits to {remote}/{branch}:\n\n{commits}\n\nContinue? [y/N] "
+        );
         let mut input = String::new();
         std::io::stdin()
             .read_line(&mut input)
@@ -659,6 +675,14 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     }
 
     eprintln!("Push successful.");
+
+    // Post-push: undo rebase unless force-rebase was requested
+    if let Some(ref orig_head) = rebase_orig_head {
+        if !args.force_rebase {
+            rebase::undo_rebase(orig_head, &root)?;
+        }
+    }
+
     Ok(())
 }
 
@@ -750,8 +774,25 @@ async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<(
     if args.force_hook && hook_path.exists() {
         std::fs::remove_file(&hook_path).context("removing existing commit-msg hook")?;
     }
-    hook::ensure_hook_installed(&hooks_dir)?;
-    eprintln!("  commit-msg hook: installed at {}", hook_path.display());
+    if args.remote_hook {
+        // Download hook from remote Gerrit server
+        let remote_name = args.remote.as_deref().unwrap_or(&app.config.remote);
+        let remote_url = subprocess::git_output(&["remote", "get-url", remote_name], &root)
+            .ok()
+            .unwrap_or_else(|| {
+                let base = app.config.gerrit_base_url().map(|u| u.to_string());
+                base.unwrap_or_default()
+            });
+        hook::fetch_remote_hook(&remote_url, &hooks_dir).await?;
+    } else {
+        hook::ensure_hook_installed(&hooks_dir)?;
+        eprintln!("  commit-msg hook: installed at {}", hook_path.display());
+    }
+
+    // Propagate hook to submodules
+    if let Err(e) = hook::propagate_hook_to_submodules(&root) {
+        tracing::warn!("failed to propagate hook to submodules: {e}");
+    }
 
     // 2. Verify remote exists
     let remote = args.remote.unwrap_or_else(|| app.config.remote.clone());

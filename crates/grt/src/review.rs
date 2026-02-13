@@ -533,14 +533,8 @@ pub async fn cmd_review_list(app: &App, branch: Option<&str>, verbose: bool) -> 
 
 /// Warn about flags that are parsed but not yet implemented.
 pub fn warn_unused_flags(args: &ReviewArgs) {
-    if args.remote_hook {
-        tracing::warn!("--remote-hook is not yet implemented");
-    }
     if args.use_pushurl {
         tracing::warn!("--use-pushurl is not yet implemented");
-    }
-    if args.force_rebase {
-        tracing::warn!("--force-rebase: pre-push rebase not yet implemented");
     }
     if args.no_custom_script {
         tracing::warn!("--no-custom-script is not yet implemented");
@@ -1347,21 +1341,8 @@ mod tests {
     }
 
     #[test]
-    fn warn_unused_flags_with_remote_hook() {
-        let args = parse_review(&["--remote-hook"]);
-        // Should not panic; we can't easily check tracing output here
-        warn_unused_flags(&args);
-    }
-
-    #[test]
     fn warn_unused_flags_with_use_pushurl() {
         let args = parse_review(&["--use-pushurl"]);
-        warn_unused_flags(&args);
-    }
-
-    #[test]
-    fn warn_unused_flags_with_force_rebase() {
-        let args = parse_review(&["-F"]);
         warn_unused_flags(&args);
     }
 

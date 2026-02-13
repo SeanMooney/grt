@@ -10,5 +10,6 @@ pub mod git;
 pub mod hook;
 pub mod list;
 pub mod push;
+pub mod rebase;
 pub mod review;
 pub mod subprocess;
