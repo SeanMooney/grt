@@ -16,6 +16,7 @@ Navigation hub for all design documentation. Start here to find what you need.
 | `ref-specs/ca-bhfuil-patterns.md` | ca-bhfuil manager pattern, async, CLI separation | Complete |
 | **Design Docs** | | |
 | `architecture.md` | grt system design, module boundaries, data flow | Draft |
+| `build-and-release.md` | Build, CI, cross-compilation, SBOM, signing, release | Draft |
 | `data-model.md` | Unified SQLite schema (from gertty + extensions) | Stub |
 | `gerrit-client.md` | REST API client, auth, sync endpoints | Stub |
 | `cli-design.md` | clap command tree, flags, output formats | Stub |
@@ -60,6 +61,7 @@ How reference project analysis feeds into grt design.
 | Git operations | git-review-workflow → git-operations |
 | Configuration | gertty-config-and-ui → config-system |
 | Architecture | ca-bhfuil-patterns → architecture |
+| Build & release | build-and-release → tech-stack (crate context) |
 
 ## Relationships
 
@@ -86,6 +88,7 @@ graph TD
         GO[git-operations]
         SYNC[sync-engine]
         EH[error-handling]
+        BR[build-and-release]
     end
 
     GDM --> DM
@@ -109,4 +112,5 @@ graph TD
     ARCH --> GO
     ARCH --> SYNC
     ARCH --> EH
+    ARCH --> BR
 ```

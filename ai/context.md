@@ -38,6 +38,7 @@ grt/
 ├── docs/design/            # Design documentation
 │   ├── tech-stack.md       # Technology selections and architecture
 │   ├── architecture.md     # System design, module boundaries, data flow
+│   ├── build-and-release.md # Build, CI, release, supply chain
 │   ├── ref-specs/          # Reverse-engineered reference project specs
 │   ├── decisions/          # Architecture Decision Records
 │   └── *.md                # grt design documents

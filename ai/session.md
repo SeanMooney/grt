@@ -16,6 +16,7 @@ Design documentation — ref-specs and architecture complete, ready to populate 
   - Batch 3: `gertty-config-and-ui.md`
 - **Phase B**: Populated `docs/design/architecture.md` — system design, module boundaries, data flow, concurrency model, startup/shutdown, error propagation
 - **Phase C**: Relocated `tech-stack.md` → `docs/design/tech-stack.md`, updated all references
+- **Phase D**: Incorporated `build-and-release.md` into `docs/design/`, updated manifest.toon, docs/design/README.md, and ai/context.md
 
 ## In Progress
 
