@@ -1,0 +1,31 @@
+project: grt
+version: 0.1.0
+phase: design
+
+docs[26]{path,type,status,topics,summary}:
+  AGENTS.md,guide,complete,entry-point session-protocol,AI agent entry point and knowledge base guide
+  tech-stack.md,guide,complete,rust tokio ratatui sqlx git2 reqwest,Technology selections and full architecture spec
+  ai/context.md,ai,complete,overview tech-stack layout,Stable project context and repo layout
+  ai/session.md,ai,complete,session handoff focus,Mutable session state and handoff notes
+  ai/rust-conventions.md,ai,complete,coding-standards error-handling async,Rust coding conventions and standards
+  ai/patterns.md,ai,complete,patterns anti-patterns testing,Pattern library — grows over time
+  docs/design/README.md,guide,complete,navigation traceability,Design doc navigation hub and traceability matrix
+  docs/design/ref-specs/README.md,guide,complete,reference-projects gertty git-review,Reference project overview and usage guide
+  docs/design/ref-specs/gertty-data-model.md,ref-spec,stub,gertty sqlite schema orm,Gertty SQLAlchemy schema with 18+ tables
+  docs/design/ref-specs/gertty-sync-system.md,ref-spec,stub,gertty sync queue offline,Gertty sync priority queue and 30+ task types
+  docs/design/ref-specs/gertty-search-language.md,ref-spec,stub,gertty search parser query,Gertty search tokenizer parser and query semantics
+  docs/design/ref-specs/gertty-config-and-ui.md,ref-spec,stub,gertty config ui keybindings,Gertty YAML config views navigation keybindings
+  docs/design/ref-specs/git-review-workflow.md,ref-spec,stub,git-review push hooks rebase,git-review push workflow hooks and config layers
+  docs/design/ref-specs/git-review-gerrit-api.md,ref-spec,stub,git-review ssh http auth,git-review SSH and HTTP protocols and auth methods
+  docs/design/ref-specs/ca-bhfuil-patterns.md,ref-spec,stub,ca-bhfuil manager async cli,ca-bhfuil manager pattern async and CLI separation
+  docs/design/architecture.md,design,stub,modules data-flow concurrency,grt system architecture and module boundaries
+  docs/design/data-model.md,design,stub,sqlite schema migrations,Unified SQLite schema from gertty plus extensions
+  docs/design/gerrit-client.md,design,stub,rest-api auth reqwest,REST API client auth and sync endpoints
+  docs/design/cli-design.md,design,stub,clap commands flags output,clap command tree flags and output formats
+  docs/design/tui-design.md,design,stub,ratatui views events rendering,ratatui views navigation and event loop
+  docs/design/search-engine.md,design,stub,nucleo query fuzzy,Query language plus fuzzy search design
+  docs/design/config-system.md,design,stub,toml config multi-server,TOML config layered config and multi-server
+  docs/design/git-operations.md,design,stub,git2 notedb hooks cherry-pick,git2 operations NoteDb reading and hook management
+  docs/design/sync-engine.md,design,stub,async sync offline scheduling,Async sync task scheduling and offline mode
+  docs/design/error-handling.md,design,stub,anyhow errors recovery,Error types recovery and user-facing messages
+  docs/design/decisions/README.md,guide,complete,adr decisions,ADR index and template
