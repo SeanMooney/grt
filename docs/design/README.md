@@ -33,14 +33,14 @@ A doc moves from draft to adopted via `git mv` when its design is implemented. S
 | `draft/architecture.md` | grt system design, module boundaries, data flow | Draft |
 | `draft/build-and-release.md` | Build, CI, cross-compilation, SBOM, signing, release | Draft |
 | `draft/data-model.md` | Unified SQLite schema (from gertty + extensions) | Stub |
-| `draft/gerrit-client.md` | REST API client, auth, sync endpoints | Stub |
-| `draft/cli-design.md` | clap command tree, flags, output formats | Stub |
+| `draft/gerrit-client.md` | REST API client, auth, retry, bearer auth, typed errors | Draft |
+| `draft/cli-design.md` | clap command tree, review subcommand, busybox argv[0], completions, exit codes | Draft |
 | `draft/tui-design.md` | ratatui views, navigation, event loop | Stub |
 | `draft/search-engine.md` | Query language + fuzzy search design | Stub |
-| `draft/config-system.md` | TOML config, layered config, multi-server | Stub |
-| `draft/git-operations.md` | gix ops, NoteDb reading, hook management | Stub |
+| `draft/config-system.md` | TOML config, layered config, bearer auth, .git suffix stripping | Draft |
+| `draft/git-operations.md` | gix reads, subprocess writes, download, cherry-pick, compare | Draft |
 | `draft/sync-engine.md` | Async sync, task scheduling, offline mode | Stub |
-| `draft/error-handling.md` | Error types, recovery, user-facing messages | Stub |
+| `draft/error-handling.md` | GerritError enum, retry, exit codes, anyhow context | Draft |
 | **Decisions** | | |
 | `decisions/` | Architecture Decision Records | Index only |
 

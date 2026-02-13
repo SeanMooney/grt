@@ -1,6 +1,6 @@
 project: grt
 version: 0.1.0
-phase: design
+phase: git-review parity complete
 
 docs[29]{path,type,status,topics,summary}:
   AGENTS.md,guide,complete,entry-point session-protocol,AI agent entry point and knowledge base guide
@@ -23,12 +23,12 @@ docs[29]{path,type,status,topics,summary}:
   docs/design/draft/architecture.md,design,draft,modules data-flow concurrency,grt system architecture and module boundaries
   docs/design/draft/build-and-release.md,design,draft,nix zuul cross-compile sbom cosign,Build packaging CI release and supply chain strategy
   docs/design/draft/data-model.md,design,stub,sqlite schema migrations,Unified SQLite schema from gertty plus extensions
-  docs/design/draft/gerrit-client.md,design,draft,rest-api auth reqwest xssi,REST API client auth endpoints XSSI stripping and connection management
-  docs/design/draft/cli-design.md,design,draft,clap commands flags output,clap command tree flags output formats and interactive behavior
+  docs/design/draft/gerrit-client.md,design,draft,rest-api auth reqwest xssi retry bearer,REST API client auth endpoints XSSI stripping retry logic bearer auth and typed errors
+  docs/design/draft/cli-design.md,design,draft,clap commands flags output review busybox,clap command tree review subcommand busybox argv0 detection shell completions and exit codes
   docs/design/draft/tui-design.md,design,stub,ratatui views events rendering,ratatui views navigation and event loop
   docs/design/draft/search-engine.md,design,stub,nucleo query fuzzy,Query language plus fuzzy search design
-  docs/design/draft/config-system.md,design,draft,toml ini credentials layered,Four-tier layered config credentials and platform paths
-  docs/design/draft/git-operations.md,design,draft,gix subprocess hooks push,gix reads subprocess writes hook management and push workflow
+  docs/design/draft/config-system.md,design,draft,toml ini credentials layered bearer,Four-tier layered config credentials bearer auth and git-suffix stripping
+  docs/design/draft/git-operations.md,design,draft,gix subprocess hooks push download compare,gix reads subprocess writes hook management push download compare and cherry-pick
   docs/design/draft/sync-engine.md,design,stub,async sync offline scheduling,Async sync task scheduling and offline mode
-  docs/design/draft/error-handling.md,design,draft,anyhow context tracing,anyhow error strategy context propagation and logging
+  docs/design/draft/error-handling.md,design,draft,anyhow thiserror gerrit-error retry exit-codes,Typed GerritError enum retry with backoff exit code mapping and anyhow context propagation
   docs/design/decisions/README.md,guide,complete,adr decisions,ADR index and template

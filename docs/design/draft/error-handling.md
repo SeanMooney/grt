@@ -1,38 +1,107 @@
 # grt Error Handling
 
 **Related docs:** `architecture.md`, `../adopted/tech-stack.md`
-**Source code:** All modules
+**Source code:** All modules, particularly `crates/grt/src/gerrit.rs` and `crates/grt/src/main.rs`
 **Status:** Draft
 
 ## Overview
 
-grt uses `anyhow` as its sole error type throughout the MVP. Every public function returns `anyhow::Result<T>`. Context is added via `.context("description")` and `.with_context(|| ...)` at each layer of the call stack, building a chain of causality that produces readable error messages for the user.
+grt uses a two-tier error strategy:
 
-There are no typed error enums in the MVP. The architecture doc describes a future two-tier strategy with `thiserror` enums at module boundaries, but the current implementation uses `anyhow` exclusively.
+1. **`thiserror` enums** at the Gerrit client boundary (`GerritError`) for typed error classification, retryability checks, and exit code mapping.
+2. **`anyhow`** throughout the rest of the application for ergonomic error propagation with context chains.
 
-## Current Error Strategy
+## Typed Errors: GerritError
 
-### anyhow Throughout
-
-Every module uses `anyhow::Result<T>`:
+The `GerritError` enum in `gerrit.rs` classifies Gerrit REST API failures:
 
 ```rust
-// gerrit.rs
-pub async fn get_change_detail(&self, change_id: &str) -> Result<ChangeInfo> { ... }
+#[derive(Debug, thiserror::Error)]
+pub enum GerritError {
+    #[error("authentication failed (HTTP {status})")]
+    AuthFailed { status: u16 },
 
-// config.rs
-pub fn load_config(repo: &GitRepo) -> Result<GerritConfig> { ... }
+    #[error("not found (HTTP 404)")]
+    NotFound,
 
-// git.rs
-pub fn current_branch(&self) -> Result<String> { ... }
+    #[error("server error (HTTP {status}): {body}")]
+    ServerError { status: u16, body: String },
 
-// push.rs
-pub fn build_refspec(opts: &PushOptions) -> Result<String> { ... }
+    #[error("network error: {0}")]
+    Network(String),
+}
 ```
 
-### Context Propagation
+### Retryability Classification
 
-Context is added at each call site to build a chain. The `?` operator propagates errors up the call stack, and `.context()` wraps each layer:
+Each error variant has a retryability classification used by the retry logic:
+
+```rust
+impl GerritError {
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            GerritError::ServerError { status, .. } => *status >= 500,
+            GerritError::Network(_) => true,
+            _ => false,
+        }
+    }
+}
+```
+
+- **Retryable:** 5xx server errors, network failures (connection reset, timeout, DNS)
+- **Not retryable:** 401/403 auth failures, 404 not found, 4xx client errors
+
+### Error Flow
+
+The internal `get_once()` method returns `Result<String, GerritError>` (typed). The public `get()` method wraps this with retry logic and converts to `anyhow::Result<String>` via `.context()`, preserving the `GerritError` in the error chain for downstream `downcast_ref`.
+
+## Exit Code Mapping
+
+The `main()` function maps errors to exit codes via `exit_code_for_error()`:
+
+```rust
+fn exit_code_for_error(err: &anyhow::Error) -> i32 {
+    if let Some(gerrit_err) = err.downcast_ref::<GerritError>() {
+        return match gerrit_err {
+            GerritError::AuthFailed { .. } => 1,
+            GerritError::NotFound => 1,
+            GerritError::ServerError { .. } => 1,
+            GerritError::Network(_) => 40,
+        };
+    }
+    let msg = format!("{err:#}");
+    if msg.contains("git config") || msg.contains("no Gerrit host configured") { return 128; }
+    if msg.contains("argument") || msg.contains("CHANGE,PS") || msg.contains("malformed") { return 3; }
+    if msg.contains("hook") { return 2; }
+    1
+}
+```
+
+| Code | Meaning | Source |
+|------|---------|-------|
+| 0 | Success | Normal exit |
+| 1 | Generic error | Default for unclassified errors, auth failures, server errors |
+| 2 | Hook-related error | Hook installation failures |
+| 3 | Malformed input | Bad argument format (e.g., invalid compare arg) |
+| 40 | Network/connectivity error | `GerritError::Network` |
+| 128 | Git config error | Missing Gerrit host configuration |
+
+These codes are compatible with git-review's exit code conventions.
+
+## Retry Logic
+
+The Gerrit client retries transient errors with exponential backoff:
+
+- **Max retries:** 3 attempts (4 total including the initial request)
+- **Backoff schedule:** 1s, 2s, 4s (`1 << attempt`)
+- **Logging:** Each retry logs a `warn!` with attempt count, error, and delay
+- **Non-retryable errors:** Returned immediately without retry
+
+See `gerrit.rs` `get()` method for implementation details.
+
+## anyhow Context Propagation
+
+All modules use `anyhow::Result<T>` with `.context()` at each call site to build error chains:
 
 ```rust
 // In app.rs
@@ -42,15 +111,10 @@ let config = config::load_config(&repo)
 // In config.rs
 let contents = std::fs::read_to_string(&path)
     .context("reading .gitreview")?;
-let parsed = parse_gitreview(&contents)
-    .context("parsing .gitreview")?;
 
-// In gerrit.rs
-let resp = self.client.get(url)
-    .headers(self.auth_headers())
-    .send()
-    .await
-    .context("sending request to Gerrit")?;
+// In gerrit.rs (public API)
+let body = self.get(&path).await?;
+serde_json::from_str(&body).context("parsing change detail")
 ```
 
 This produces chained messages like:
@@ -59,32 +123,21 @@ This produces chained messages like:
 Error: loading configuration: parsing .gitreview: missing [gerrit] section in .gitreview
 ```
 
-### CLI Error Display
+## CLI Error Display
 
-Errors propagate to `main()`, which uses `{:#}` (anyhow's alternate display) to print the full chain:
+Errors propagate to `main()`, which uses `{:#}` (anyhow's alternate display) to print the full chain to stderr:
 
 ```rust
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("Error: {:#}", e);
-        std::process::exit(1);
+        eprintln!("Error: {e:#}");
+        std::process::exit(exit_code_for_error(&e));
     }
 }
 ```
 
 The `{:#}` format produces `outer: middle: inner` chains. The `{:?}` format (used with `RUST_BACKTRACE=1`) additionally includes a stack backtrace.
-
-### No Recovery Logic
-
-The MVP has no retry or recovery paths. All errors are terminal -- they propagate to `main()` and exit with code 1. The only exception is the version command, which catches Gerrit connectivity errors and prints "unavailable" instead of failing:
-
-```rust
-match client.get_version().await {
-    Ok(version) => println!("Gerrit {}", version),
-    Err(_) => println!("Gerrit unavailable"),
-}
-```
 
 ## Error Categories
 
@@ -92,55 +145,48 @@ match client.get_version().await {
 
 **Source module:** `gerrit.rs`
 
-| Error | Cause | User sees |
+| Error | Cause | Exit Code |
 |-------|-------|-----------|
-| Connection refused | Gerrit server down or wrong host/port | `sending request to Gerrit: error sending request: connection refused` |
-| Timeout | Server too slow (>10s connect, >30s request) | `sending request to Gerrit: request timeout` |
-| DNS resolution failure | Bad hostname | `sending request to Gerrit: error sending request: dns error` |
-| HTTP 401 Unauthorized | Bad credentials | `Gerrit API error (401 Unauthorized): Unauthorized` |
-| HTTP 404 Not Found | Bad change ID or deleted change | `Gerrit API error (404 Not Found): Not found: ...` |
-| HTTP 5xx | Server error | `Gerrit API error (500 Internal Server Error): ...` |
-| XSSI parse failure | Unexpected response format | `parsing change detail: expected value at line 1 column 1` |
+| Connection refused | Gerrit server down or wrong host/port | 40 |
+| Timeout | Server too slow (>10s connect, >30s request) | 40 |
+| DNS resolution failure | Bad hostname | 40 |
+| HTTP 401/403 | Bad credentials | 1 |
+| HTTP 404 | Bad change ID or deleted change | 1 |
+| HTTP 5xx | Server error (retried up to 3 times) | 1 |
+| XSSI parse failure | Unexpected response format | 1 |
 
 ### Config Errors
 
 **Source modules:** `config.rs`, `app.rs`
 
-| Error | Cause | User sees |
+| Error | Cause | Exit Code |
 |-------|-------|-----------|
-| Missing .gitreview | No config file in repo | `reading .gitreview: No such file or directory` |
-| Missing [gerrit] section | Malformed .gitreview | `parsing .gitreview: missing [gerrit] section in .gitreview` |
-| Invalid port | Non-numeric port in .gitreview | `parsing .gitreview: parsing port in .gitreview: invalid digit` |
-| No host configured | No host in any config source | `no Gerrit host configured. Create a .gitreview file or set gitreview.host in git config` |
-| Bad credentials.toml permissions | File mode > 0600 | `credentials.toml has permissions 0644, expected 0600` |
-| Credential TOML parse error | Invalid TOML syntax | `parsing credentials.toml: TOML parse error at line ...` |
-| TLS enforcement | Trying to send credentials over HTTP | `refusing to send credentials over plain HTTP (scheme: http). Use --insecure to override` |
+| Missing .gitreview | No config file in repo | 1 |
+| Missing [gerrit] section | Malformed .gitreview | 1 |
+| No host configured | No host in any config source | 128 |
+| Bad credentials.toml permissions | File mode > 0600 | 1 |
+| TLS enforcement | Credentials over HTTP without --insecure | 1 |
 
 ### Git Errors
 
 **Source modules:** `git.rs`, `subprocess.rs`, `hook.rs`
 
-| Error | Cause | User sees |
+| Error | Cause | Exit Code |
 |-------|-------|-----------|
-| Not a git repository | Running outside a repo | `discovering git repository: could not find repository` |
-| Detached HEAD | No symbolic ref | `HEAD is detached` |
-| Bare repository | No worktree | `repository is bare (no worktree)` |
-| git push failure | Remote rejection, auth failure | `git push failed (exit 128): ...` (with Gerrit's error message) |
-| Hook write failure | Permission denied on hooks dir | `writing commit-msg hook: Permission denied` |
-| Missing remote | Remote not configured | `git remote get-url failed: ...` |
-| git credential failure | No credential helper configured | `git credential fill failed: ...` |
+| Not a git repository | Running outside a repo | 1 |
+| Detached HEAD | No symbolic ref | 1 |
+| git push failure | Remote rejection, auth failure | 1 |
+| Hook write failure | Permission denied on hooks dir | 2 |
 
 ### User Input Errors
 
-**Source modules:** `push.rs`, `comments.rs`
+**Source modules:** `push.rs`, `review.rs`, `comments.rs`
 
-| Error | Cause | User sees |
+| Error | Cause | Exit Code |
 |-------|-------|-----------|
-| Missing Change-Id | HEAD commit has no trailer | `HEAD commit is missing a Change-Id trailer. Run 'grt setup' to install the commit-msg hook, then amend the commit` |
-| Invalid Change-Id | Trailer doesn't match format | Same as above (validation rejects malformed IDs) |
-| No change specified | No argument and no Change-Id in HEAD | `no change specified and could not extract Change-Id from HEAD commit` |
-| No unpushed commits | Nothing to push | `No unpushed commits found.` (not an error -- exits 0) |
-| Whitespace in reviewer | Invalid reviewer name | Rejected during refspec construction |
+| Missing Change-Id | HEAD commit has no trailer | 1 |
+| Bad compare argument | Invalid CHANGE,PS format | 3 |
+| No change specified | No argument and no Change-Id in HEAD | 1 |
 
 ## User-Facing Messages
 
@@ -149,10 +195,6 @@ match client.get_version().await {
 Error messages follow two principles:
 
 1. **Chain of causality**: Each `.context()` adds *what was being attempted*, not what went wrong. The innermost error provides the specific failure.
-
-   Good: `loading configuration: parsing .gitreview: invalid digit found in string`
-   Bad: `config error: parse error: error`
-
 2. **Actionable when possible**: Where the user can fix the problem, the message says how:
    - `Run 'grt setup' to install the commit-msg hook`
    - `Use --insecure to override, or switch to HTTPS`
@@ -162,9 +204,8 @@ Error messages follow two principles:
 
 - **Errors**: Always to stderr via `eprintln!()`
 - **Data output**: Always to stdout (command results, version info, comment text)
-- **Progress messages**: To stderr via `eprintln!()` (e.g., setup step output)
-
-This separation allows scripting: `grt comments --format json 2>/dev/null` gives clean JSON on stdout.
+- **Progress messages**: To stderr via `eprintln!()` (e.g., "Downloading change 12345...")
+- **Retry warnings**: To stderr via `tracing::warn!`
 
 ## Logging
 
@@ -172,112 +213,39 @@ This separation allows scripting: `grt comments --format json 2>/dev/null` gives
 
 grt uses the `tracing` crate for structured logging, separate from error display:
 
-```rust
-tracing::debug!("loading config from {:?}", path);
-tracing::info!("connected to Gerrit {}", version);
-tracing::warn!("credentials.toml not found, trying git credential helper");
-```
-
-Log output goes to stderr via `tracing-subscriber` with a configurable level controlled by `-v` flags:
-
 | Flag | Level | Purpose |
 |------|-------|---------|
-| (none) | `warn` | Warnings only |
+| (none) | `warn` | Warnings only (including retry warnings) |
 | `-v` | `info` | Milestone events |
 | `-vv` | `debug` | Decision points, paths taken |
 | `-vvv` | `trace` | Data-level detail |
 
-Tracing is configured without timestamps and without the target module path, keeping output compact for CLI use:
-
-```
- DEBUG loading config from "/home/user/project/.gitreview"
-  INFO connected to Gerrit 3.9.1
-```
-
-### Separation from Error Display
-
-Tracing and error display serve different audiences:
-
-- **Tracing** is for debugging grt itself (developers, bug reporters). Controlled by `-v`.
-- **Error messages** are for end users. Always displayed on failure.
-
-A typical error flow:
-
-```
-DEBUG attempting to read .gitreview       <- tracing (only with -v)
-DEBUG .gitreview not found, trying git config  <- tracing
-Error: no Gerrit host configured          <- error (always shown)
-```
-
 ## Future Evolution
 
-### Typed Error Enums
+### Additional Typed Error Enums
 
-The architecture doc (`architecture.md`) describes a future two-tier error strategy where module boundaries use `thiserror` enums:
+Candidates for future typed enums:
 
-```rust
-// Planned, not yet implemented
-#[derive(Debug, thiserror::Error)]
-pub enum GerritError {
-    #[error("authentication failed")]
-    AuthFailed,
-    #[error("change not found: {0}")]
-    NotFound(String),
-    #[error("server error ({0})")]
-    ServerError(u16),
-    #[error("network error")]
-    NetworkError(#[source] reqwest::Error),
-}
-```
-
-This would enable callers to match on specific error types:
-
-```rust
-match client.get_change(id).await {
-    Err(e) if e.downcast_ref::<GerritError>() == Some(&GerritError::AuthFailed) => {
-        // Handle auth failure specifically
-    }
-    Err(e) => return Err(e),
-    Ok(change) => { ... }
-}
-```
-
-**Candidates for typed enums:**
-
-- `GerritError` -- distinguish retryable (network, 5xx) from permanent (auth, 404) failures
 - `ConfigError` -- distinguish missing file from parse error from validation error
 - `GitError` -- distinguish "not a repo" from "detached HEAD" from subprocess failures
 
 ### TUI Error Handling
 
-The TUI (planned post-MVP) will require non-fatal error handling. Errors must not crash the application:
+The TUI (planned post-MVP) will require non-fatal error handling. Errors must not crash the application -- they should be displayed in a status bar.
 
-```rust
-// Planned pattern from architecture.md
-match app.fetch_comments(id).await {
-    Ok(comments) => self.display_comments(comments),
-    Err(e) => self.status_message = format!("{:#}", e),
-}
-```
+### miette Integration
 
-Background sync errors would flow through a channel as `SyncEvent::Error(String)` events.
-
-### Retry Logic
-
-Planned for the sync engine. Transient errors (connection reset, 5xx, timeout) should be retried with exponential backoff. The typed `GerritError` enum would enable distinguishing retryable from permanent failures.
+The architecture doc describes potential `miette` integration for rich error rendering with source spans, particularly useful for config file parse errors.
 
 ## Divergences from Architecture Doc
 
-The architecture doc describes several error handling features not yet implemented:
-
-| Architecture doc describes | MVP status |
-|---------------------------|------------|
-| `thiserror` enums at module boundaries | Not implemented -- `anyhow` throughout |
-| `GerritError`, `DbError`, `SearchError` types | Not implemented |
+| Architecture doc describes | Current status |
+|---------------------------|---------------|
+| `thiserror` enums at module boundaries | Implemented for `GerritError` only |
+| `GerritError` type | Implemented with 4 variants |
+| `DbError`, `SearchError` types | Not needed yet (no DB or search) |
 | TUI error handling (status bar display) | No TUI yet |
-| Retry with exponential backoff | No retry logic |
-| `ConfigError` with miette span information | No miette integration |
-| Structured exit codes (2 for auth) | Exit code 1 for all errors |
+| Retry with exponential backoff | Implemented (3 retries, 1s/2s/4s) |
+| Structured exit codes | Implemented (0/1/2/3/40/128) |
+| `ConfigError` with miette span information | Not implemented |
 | `SyncEvent::Error` channel pattern | No sync engine yet |
-
-These are planned for implementation as the corresponding features are built.

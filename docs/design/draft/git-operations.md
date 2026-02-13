@@ -1,15 +1,15 @@
 # grt Git Operations
 
 **Related ref-specs:** `../ref-specs/git-review-workflow.md`
-**Source code:** `crates/grt/src/git.rs`, `crates/grt/src/subprocess.rs`, `crates/grt/src/hook.rs`, `crates/grt/src/push.rs`
+**Source code:** `crates/grt/src/git.rs`, `crates/grt/src/subprocess.rs`, `crates/grt/src/hook.rs`, `crates/grt/src/push.rs`, `crates/grt/src/review.rs`
 **Status:** Draft
 
 ## Overview
 
 grt uses a dual approach for git operations:
 
-- **gix** (gitoxide, pure-Rust git) for read-only repository queries: discovering the repo, reading HEAD, resolving config values, finding the hooks directory. These operations benefit from gix's structured API and avoid process spawning overhead.
-- **Subprocess** (`std::process::Command`) for operations that modify state or interact with external systems: `git push`, `git log`, `git credential fill/approve/reject`. These require the full git CLI behavior, particularly for Gerrit's custom receive-pack options.
+- **gix** (gitoxide, pure-Rust git) for read-only repository queries: discovering the repo, reading HEAD, resolving config values, finding the hooks directory, resolving upstream tracking branches. These operations benefit from gix's structured API and avoid process spawning overhead.
+- **Subprocess** (`std::process::Command`) for operations that modify state or interact with external systems: `git push`, `git fetch`, `git checkout`, `git cherry-pick`, `git diff`, `git log`, `git credential fill/approve/reject`, `git remote update`. These require the full git CLI behavior, particularly for Gerrit's custom receive-pack options.
 
 The split is pragmatic: gix provides fast, type-safe access to repository metadata, while subprocess calls handle the cases where gix's API is incomplete or where Gerrit-specific behaviors require the canonical git implementation.
 
@@ -17,120 +17,55 @@ The split is pragmatic: gix provides fast, type-safe access to repository metada
 
 ### `GitRepo::open(path)`
 
-Uses `gix::discover(path)` to find the nearest git repository at or above the given path. This handles:
-
-- Standard repositories (`.git` directory)
-- Repositories in parent directories (walking up the directory tree)
-- Bare repositories (detected, but rejected by `root()` since grt requires a worktree)
-
-```rust
-pub fn open(path: &Path) -> Result<Self> {
-    let repo = gix::discover(path).context("discovering git repository")?;
-    Ok(Self { repo })
-}
-```
+Uses `gix::discover(path)` to find the nearest git repository at or above the given path. Handles standard repositories, repositories in parent directories, and bare repositories (detected but rejected by `root()` since grt requires a worktree).
 
 ### Worktree Root
 
-`GitRepo::root()` returns the worktree path. Returns an error for bare repositories:
-
-```rust
-pub fn root(&self) -> Result<PathBuf> {
-    self.repo
-        .workdir()
-        .map(|p| p.to_path_buf())
-        .ok_or_else(|| anyhow::anyhow!("repository is bare (no worktree)"))
-}
-```
-
-The root path is used as the working directory for all subprocess calls and as the base for locating `.gitreview`.
+`GitRepo::root()` returns the worktree path. Returns an error for bare repositories. The root path is used as the working directory for all subprocess calls and as the base for locating `.gitreview`.
 
 ## Branch and Commit Operations
 
 ### `current_branch()` -- Current Branch Name
 
-Reads the symbolic HEAD ref via gix and strips the `refs/heads/` prefix:
-
-```rust
-pub fn current_branch(&self) -> Result<String> {
-    let head = self.repo.head_ref().context("reading HEAD ref")?;
-    match head {
-        Some(reference) => {
-            let full_name = reference.name().as_bstr().to_string();
-            let branch = full_name.strip_prefix("refs/heads/").unwrap_or(&full_name);
-            Ok(branch.to_string())
-        }
-        None => anyhow::bail!("HEAD is detached"),
-    }
-}
-```
-
-Returns an error if HEAD is detached (no symbolic ref). Used during push to determine the default branch and for informational display.
+Reads the symbolic HEAD ref via gix and strips the `refs/heads/` prefix. Returns an error if HEAD is detached (no symbolic ref). Used during push to determine the default branch and for informational display.
 
 ### `head_commit_message()` -- HEAD Commit Message
 
-Reads the commit message of the HEAD commit via gix:
-
-```rust
-pub fn head_commit_message(&self) -> Result<String> {
-    let head = self.repo.head_commit().context("reading HEAD commit")?;
-    let message = head.message_raw().context("reading commit message")?;
-    Ok(message.to_string())
-}
-```
-
-Used to extract the Change-Id trailer for push validation and for auto-detecting the change identifier in `grt comments`.
+Reads the commit message of the HEAD commit via gix. Used to extract the Change-Id trailer for push validation and for auto-detecting the change identifier in `grt comments`.
 
 ### `config_value(key)` -- Git Config Lookup
 
-Reads a single git config value via gix's config snapshot:
+Reads a single git config value via gix's config snapshot. Used for:
+1. Loading `gitreview.*` config values during config layering
+2. Resolving `core.hooksPath` for hook installation
+3. Resolving `branch.<name>.remote/merge` for upstream tracking
+
+### `upstream_branch()` -- Upstream Tracking Branch
+
+Reads `branch.<name>.remote` and `branch.<name>.merge` from git config to determine the upstream tracking branch:
 
 ```rust
-pub fn config_value(&self, key: &str) -> Option<String> {
-    let config = self.repo.config_snapshot();
-    config.string(key).map(|v| v.to_string())
+pub fn upstream_branch(&self) -> Result<Option<(String, String)>> {
+    let branch = self.current_branch()?;
+    let remote_key = format!("branch.{branch}.remote");
+    let merge_key = format!("branch.{branch}.merge");
+    let remote = match self.config_value(&remote_key) {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    let merge = match self.config_value(&merge_key) {
+        Some(m) => m.strip_prefix("refs/heads/").unwrap_or(&m).to_string(),
+        None => return Ok(None),
+    };
+    Ok(Some((remote, merge)))
 }
 ```
 
-Used for two purposes:
-1. Loading `gitreview.*` config values during config layering
-2. Resolving `core.hooksPath` for hook installation
+Returns `Some((remote, branch))` if both are configured, `None` otherwise. Used by `--track` to resolve the push target when no explicit branch is provided.
 
 ### `is_dirty()` -- Working Tree Status
 
-Checks for uncommitted changes by running `git status --porcelain` as a subprocess:
-
-```rust
-pub fn is_dirty(&self) -> Result<bool> {
-    let output = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(self.root()?)
-        .output()
-        .context("running git status")?;
-    Ok(!output.stdout.is_empty())
-}
-```
-
-This uses a subprocess rather than gix because gix's status API requires careful feature flag management. Not currently used in the MVP workflow but available for future commands.
-
-### `count_unpushed_commits()` -- Unpushed Commit Count
-
-Counts commits between HEAD and the remote tracking branch via subprocess:
-
-```rust
-pub fn count_unpushed_commits(remote: &str, branch: &str, work_dir: &Path) -> Result<usize> {
-    let remote_ref = format!("remotes/{}/{}", remote, branch);
-    let output = git_output(
-        &["log", "HEAD", "--not", &remote_ref, "--oneline"],
-        work_dir,
-    );
-    // ...
-}
-```
-
-When the remote tracking branch doesn't exist (first push to a new branch), falls back to counting all commits via `git log --oneline`. Returns 0 when there are no unpushed commits.
-
-This is the same approach git-review uses (`git log HEAD --not --remotes=<remote>`).
+Checks for uncommitted changes by running `git status --porcelain` as a subprocess rather than gix, since gix's status API requires careful feature flag management.
 
 ## Push Workflow
 
@@ -151,217 +86,175 @@ HEAD:refs/for/<branch>[%<option1>,<option2>,...]
 | ready | `ready` | Mark as ready for review |
 | private | `private` | Mark as private |
 | remove-private | `remove-private` | Remove private flag |
-| reviewers | `r=<user>` | One per reviewer; whitespace in names is rejected |
+| reviewers | `r=<user>` | One per reviewer; whitespace rejected |
 | cc | `cc=<user>` | One per CC recipient |
 | hashtags | `hashtag=<tag>` | One per hashtag |
 | message | `m=<url-encoded-text>` | URL-encoded via `urlencoding::encode()` |
 | notify | `notify=<setting>` | NONE, OWNER, OWNER_REVIEWERS, ALL |
 | no-rebase | `submit=false` | Disable automatic rebase |
 
-Options are joined with commas and appended after a `%` separator. If no options are present, the refspec is just `HEAD:refs/for/<branch>`.
-
-**Input validation:** Reviewer names containing whitespace are rejected with an error, since whitespace in the refspec would break the push command.
-
 ### Change-Id Extraction and Validation
 
-`push::extract_change_id()` scans the commit message from bottom to top for a `Change-Id:` trailer:
+`push::extract_change_id()` scans the commit message from bottom to top for a `Change-Id:` trailer. Validation is strict: the ID must start with `I`, be exactly 41 characters, and the remaining 40 characters must be hexadecimal.
 
-```rust
-pub fn extract_change_id(commit_message: &str) -> Option<String> {
-    for line in commit_message.lines().rev() {
-        let trimmed = line.trim();
-        if let Some(id) = trimmed.strip_prefix("Change-Id: ") {
-            let id = id.trim();
-            if id.starts_with('I')
-                && id.len() == 41
-                && id[1..].chars().all(|c| c.is_ascii_hexdigit())
-            {
-                return Some(id.to_string());
-            }
-        }
-    }
-    None
-}
-```
+### Pre-Push Operations
 
-The validation is strict: the ID must start with `I`, be exactly 41 characters, and the remaining 40 characters must be hexadecimal. This matches the format produced by Gerrit's commit-msg hook.
+Several flags trigger operations before the push:
 
-`push::validate_change_id()` wraps extraction with an actionable error message:
+- **`--update`** (`-u`): Runs `git remote update <remote>` to fetch latest refs
+- **`--new-changeid`** (`-i`): Strips the existing Change-Id trailer and amends the commit (the commit-msg hook generates a new one)
+- **`--track`**: Resolves the upstream tracking branch via `upstream_branch()` and uses it as the push target
 
-```
-HEAD commit is missing a Change-Id trailer. Run `grt setup` to install the commit-msg hook, then amend the commit
-```
+### Post-Push Operations
+
+- **`--finish`** (`-f`): After a successful push, checks out the target branch and deletes the current topic branch
 
 ### Multi-Commit Confirmation
 
-Before pushing, `cmd_push` counts unpushed commits and prompts for confirmation when there are multiple:
+Before pushing, `cmd_push` counts unpushed commits and prompts for confirmation when there are multiple (unless `--yes` is set).
 
-```
-About to push 3 commit(s) to gerrit/main. Continue? [y/N]
-```
+## Download Workflow
 
-This matches git-review's behavior -- multiple commits create dependent changes in Gerrit, which is often unintentional for new users.
+### `cmd_review_download()` -- Download a Change
 
-### Push Execution
+Downloads a change from Gerrit by fetching the patchset ref and creating a local branch.
 
-The actual push uses `subprocess::git_exec()`, which inherits stdout/stderr for interactive output (allowing the user to see git's push progress and Gerrit's response):
+**Workflow:**
+1. Normalize change argument (parse URL patterns into `CHANGE[,PS]` format)
+2. Split into change ID and optional patchset number
+3. Authenticate and verify credentials
+4. Fetch change detail with `ALL_REVISIONS`
+5. Find the target revision (specific patchset or current)
+6. `git fetch <remote> <ref>` to retrieve the patchset
+7. `git checkout -b <branch> FETCH_HEAD` to create the local branch
 
-```rust
-subprocess::git_exec(&["push", &remote, &refspec], &root)?;
-```
+**Branch naming:** `review/<owner>/<topic>` when both owner username and topic are available, otherwise `review/<change_number>/<patchset>`.
+
+### URL Parsing
+
+The `parse_change_url()` function normalizes Gerrit URLs to `CHANGE[,PS]` format:
+
+| URL Pattern | Example | Result |
+|------------|---------|--------|
+| Simple | `https://review.example.com/12345` | `"12345"` |
+| With patchset | `https://review.example.com/12345/2` | `"12345,2"` |
+| Fragment | `https://review.example.com/#/c/12345` | `"12345"` |
+| PolyGerrit | `https://review.example.com/c/project/+/12345/1` | `"12345,1"` |
+
+## Cherry-Pick Workflow
+
+Three modes for applying a Gerrit change to the current branch:
+
+### `cmd_review_cherrypick()` -- Standard Cherry-Pick (`-x`)
+
+Fetches the patchset ref and runs `git cherry-pick FETCH_HEAD`.
+
+### `cmd_review_cherrypickindicate()` -- With Indication (`-X`)
+
+Fetches the ref and runs `git cherry-pick -x FETCH_HEAD`, adding "(cherry picked from commit ...)" to the commit message.
+
+### `cmd_review_cherrypickonly()` -- No Commit (`-N`)
+
+Fetches the ref and runs `git cherry-pick --no-commit FETCH_HEAD`, applying changes to the working directory without creating a commit.
+
+## Compare Workflow
+
+### `cmd_review_compare()` -- Diff Patchsets (`-m`)
+
+Compares two patchsets of a change by fetching both refs and running `git diff`.
+
+**Workflow:**
+1. Parse compare argument (`CHANGE,PS[-PS]`)
+2. Authenticate
+3. Fetch change detail with `ALL_REVISIONS`
+4. Find both target revisions
+5. `git fetch <remote> <ref>` for each patchset, capturing the resolved SHA via `git rev-parse FETCH_HEAD`
+6. `git diff <sha1> <sha2>` with inherited stdout for interactive output
 
 ## Hook Management
 
 ### Vendored commit-msg Hook
 
-The Gerrit commit-msg hook is embedded directly in the grt binary using `include_str!`:
-
-```rust
-const COMMIT_MSG_HOOK: &str = include_str!("../resources/commit-msg");
-```
-
-The vendored hook is sourced from Gerrit's official repository. This approach eliminates the need for network access during hook installation (no HTTP fetch or SCP), matching git-review's default behavior of writing a vendored copy.
+The Gerrit commit-msg hook is embedded directly in the grt binary using `include_str!`. This eliminates the need for network access during hook installation.
 
 ### `ensure_hook_installed(hooks_dir)`
 
-Installs the hook if not already present:
+Installs the hook if not already present. Key behaviors:
 
-```rust
-pub fn ensure_hook_installed(hooks_dir: &Path) -> Result<()> {
-    let hook_path = hooks_dir.join("commit-msg");
-    if hook_path.exists() {
-        return Ok(());
-    }
-    // Create hooks directory if needed
-    if !hooks_dir.exists() {
-        std::fs::create_dir_all(hooks_dir).context("creating hooks directory")?;
-    }
-    std::fs::write(&hook_path, COMMIT_MSG_HOOK).context("writing commit-msg hook")?;
-    // Set executable permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(&hook_path, perms).context("setting hook permissions")?;
-    }
-    Ok(())
-}
-```
-
-**Key behaviors:**
-
-- **Idempotent**: Returns `Ok(())` immediately if the hook file exists, regardless of content. Existing hooks (including custom ones) are never overwritten.
-- **Creates directories**: If the hooks directory doesn't exist (or is nested), `create_dir_all` creates it.
-- **Executable permissions**: On Unix, sets `0o755` so git can execute the hook.
-- **Force reinstall**: `grt setup --force-hook` removes the existing hook before calling `ensure_hook_installed`, allowing a fresh install.
+- **Idempotent**: Returns `Ok(())` immediately if the hook file exists
+- **Creates directories**: If the hooks directory doesn't exist, `create_dir_all` creates it
+- **Executable permissions**: On Unix, sets `0o755`
+- **Force reinstall**: `grt setup --force-hook` removes the existing hook before calling `ensure_hook_installed`
 
 ### Hooks Directory Resolution
 
-`GitRepo::hooks_dir()` respects the `core.hooksPath` git config:
+`GitRepo::hooks_dir()` respects `core.hooksPath` git config:
 
-```rust
-pub fn hooks_dir(&self) -> Result<PathBuf> {
-    if let Some(custom) = self.config_value("core.hooksPath") {
-        let custom_path = Path::new(&custom);
-        if custom_path.is_absolute() {
-            return Ok(custom_path.to_path_buf());
-        }
-        let root = self.root()?;
-        return Ok(root.join(custom_path));
-    }
-    let git_dir = self.repo.git_dir().to_path_buf();
-    Ok(git_dir.join("hooks"))
-}
-```
-
-- Absolute `core.hooksPath`: used as-is
-- Relative `core.hooksPath`: resolved against the worktree root
-- No `core.hooksPath`: defaults to `<git_dir>/hooks`
-
-This matches git-review's `git_get_hooks_path()` behavior.
+- Absolute path: used as-is
+- Relative path: resolved against the worktree root
+- Not set: defaults to `<git_dir>/hooks`
 
 ## Subprocess Operations
 
-### `git_output(args, work_dir)` -- Capture Output
+### Core Helpers
 
-Runs a git command and captures stdout. Used for non-interactive operations where grt needs to parse the output:
+| Function | Purpose | Output |
+|----------|---------|--------|
+| `git_output(args, work_dir)` | Capture stdout | `Result<String>` |
+| `git_exec(args, work_dir)` | Interactive (inherited stdout/stderr) | `Result<()>` |
 
-```rust
-pub fn git_output(args: &[&str], work_dir: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(work_dir)
-        .output()
-        .with_context(|| format!("running git {}", args.join(" ")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("git {} failed (exit {}): {}", args.join(" "), ...);
-    }
-    Ok(stdout.trim_end().to_string())
-}
-```
+### Download/Cherry-Pick Operations
 
-**Used for:** `git log --oneline` (counting commits), `git remote get-url` (verifying remotes).
+| Function | Git Command | Used By |
+|----------|-------------|---------|
+| `git_fetch_ref(remote, ref, dir)` | `git fetch <remote> <ref>` | Download, cherry-pick |
+| `git_checkout_new_branch(branch, start, dir)` | `git checkout -b <branch> <start>` | Download |
+| `git_cherry_pick(commit, dir)` | `git cherry-pick <commit>` | Cherry-pick (`-x`) |
+| `git_cherry_pick_indicate(commit, dir)` | `git cherry-pick -x <commit>` | Cherry-pick indicate (`-X`) |
+| `git_cherry_pick_no_commit(commit, dir)` | `git cherry-pick --no-commit <commit>` | Cherry-pick only (`-N`) |
 
-### `git_exec(args, work_dir)` -- Interactive Execution
+### Compare Operations
 
-Runs a git command with inherited stdout/stderr, allowing interactive output:
+| Function | Git Command | Used By |
+|----------|-------------|---------|
+| `git_fetch_ref_sha(remote, ref, dir)` | `git fetch` + `git rev-parse FETCH_HEAD` | Compare |
+| `git_diff(sha1, sha2, dir)` | `git diff <sha1> <sha2>` | Compare |
 
-```rust
-pub fn git_exec(args: &[&str], work_dir: &Path) -> Result<()> {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(work_dir)
-        .status()
-        .with_context(|| format!("running git {}", args.join(" ")))?;
-    if !status.success() {
-        anyhow::bail!("git {} failed (exit {})", ...);
-    }
-    Ok(())
-}
-```
+### Push-Related Operations
 
-**Used for:** `git push` (so the user sees Gerrit's push output).
+| Function | Git Command | Used By |
+|----------|-------------|---------|
+| `git_checkout(branch, dir)` | `git checkout <branch>` | `--finish` |
+| `git_delete_branch(branch, dir)` | `git branch -D <branch>` | `--finish` |
+| `git_remote_update(remote, dir)` | `git remote update <remote>` | `--update` |
+| `git_regenerate_changeid(dir)` | Strip Change-Id + `git commit --amend` | `--new-changeid` |
+| `count_unpushed_commits(remote, branch, dir)` | `git log HEAD --not remotes/<remote>/<branch> --oneline` | Push confirmation |
 
-### Credential Flow
+### Credential Operations
 
-Three subprocess functions manage git credentials:
-
-**`git_credential_fill(url, work_dir)`**: Invokes `git credential fill` with the URL's protocol and host on stdin. Parses the key=value output to extract username and password.
-
-**`git_credential_approve(url, username, password, work_dir)`**: Calls `git credential approve` to tell the credential helper to cache the credentials. Called after successful authentication.
-
-**`git_credential_reject(url, username, password, work_dir)`**: Calls `git credential reject` to invalidate cached credentials. Called after authentication failure.
-
-All three use piped stdin/stdout and silently ignore failures (the approve/reject operations are best-effort).
+| Function | Git Command | Used By |
+|----------|-------------|---------|
+| `git_credential_fill(url, dir)` | `git credential fill` | Credential fallback |
+| `git_credential_approve(url, user, pass, dir)` | `git credential approve` | After successful auth |
+| `git_credential_reject(url, user, pass, dir)` | `git credential reject` | After failed auth |
 
 ## Future Work
 
 ### NoteDb Reading
 
-Not yet implemented. Gerrit stores metadata in special git refs:
-
-- `refs/changes/XX/NNNN/meta` -- change metadata
-- `refs/changes/XX/NNNN/N` -- patchset refs
-- `refs/notes/review` -- review notes
-- `refs/meta/config` -- project configuration
-
-Reading NoteDb would enable offline access to change metadata without REST API calls. This would use gix to read ref contents and parse Gerrit's custom note format.
-
-### Cherry-Pick
-
-Not yet implemented. Planned as a `grt cherry-pick` command that applies a Gerrit change's commit to the local repository, similar to git-review's download/checkout workflow.
+Not yet implemented. Gerrit stores metadata in special git refs. Reading NoteDb would enable offline access to change metadata without REST API calls.
 
 ### gix Push Support
 
-Currently, `git push` is always done via subprocess because gix's push support may not handle Gerrit's custom receive-pack options (the `%topic=...` syntax in refspecs). If gix adds support for custom refspec suffixes in the future, the subprocess call could be replaced.
+Currently, `git push` is always done via subprocess because gix's push support may not handle Gerrit's custom receive-pack options (the `%topic=...` syntax in refspecs).
 
 ## Divergences from git-review (`git-review-workflow.md`)
 
-- **gix for reads, subprocess for writes**: git-review calls all git operations via subprocess and parses text output. grt uses gix's structured API for read operations, eliminating text parsing and LANG=C requirements.
-- **No rebase workflow**: git-review's default "test rebase then undo" is not implemented. grt focuses on the push path and leaves rebasing to the user.
-- **No auto-amend for missing Change-Id**: git-review amends the commit if the hook wasn't installed. grt returns an error and directs the user to run `grt setup`.
-- **No remote creation**: git-review creates the Gerrit remote if it doesn't exist. grt assumes the remote exists.
+- **gix for reads, subprocess for writes**: git-review calls all git operations via subprocess. grt uses gix's structured API for read operations.
+- **No rebase workflow**: git-review's default "test rebase then undo" is not implemented.
+- **No auto-amend for missing Change-Id**: git-review amends the commit if the hook wasn't installed. grt returns an error.
+- **No remote creation**: git-review creates the Gerrit remote if it doesn't exist. grt assumes it exists.
 - **No submodule hook propagation**: git-review copies the commit-msg hook into submodules. grt installs it only in the main repository.
-- **Vendored hook only**: git-review supports fetching the hook via HTTP or SCP. grt always uses the vendored copy embedded in the binary.
+- **Vendored hook only**: git-review supports fetching the hook via HTTP or SCP. grt always uses the vendored copy.
 - **Strict Change-Id validation**: git-review checks for any `Change-Id:` prefix. grt validates the full format (I + 40 hex characters).
+- **URL parsing**: git-review does not parse Gerrit URLs for download. grt supports multiple URL formats for change argument normalization.

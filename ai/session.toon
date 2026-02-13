@@ -1,6 +1,6 @@
-phase: Post-MVP documentation
+phase: git-review feature parity complete
 
-completed[8]{task,detail}:
+completed[14]{task,detail}:
   Phase 0: Infrastructure,Added workspace deps envrc gitignore; upgraded Rust 1.82->1.85 for edition2024 transitive deps
   Phase 1: Config + Git Repo,config.rs (.gitreview INI parser layered config) git.rs (gix wrapper for repo discovery HEAD config hooks)
   Phase 2: Gerrit REST Client,gerrit.rs (reqwest client XSSI stripping serde types all endpoints) with mockito integration tests
@@ -9,30 +9,40 @@ completed[8]{task,detail}:
   Phase 5: CLI Wiring,main.rs (clap derive command tree) app.rs (App struct wiring config+git+gerrit)
   Phase 6: End-to-End & Polish,Fixed clippy warnings cargo-deny issues (MPL-2.0 Zlib CDLA-Permissive-2.0 licenses gix 0.70->0.79 security advisory work_dir deprecation)
   Phase 7: Design Doc Population,Populated 5 stub design docs (gerrit-client cli-design config-system git-operations error-handling) from source code and ref-specs
+  Phase 8: Review CLI Restructure,review.rs (ReviewArgs git-review flag parity) busybox argv[0] detection export.rs (symlink management) URL-to-change-ID parser
+  Phase 9: Download & Cherry-pick,Download (-d) fetches patchset ref and creates review branch; cherry-pick (-x -X -N) modes apply changes to current branch
+  Phase 10: List Mode,list.rs (column-aligned output -l/-ll) build_list_query() format_reviews_text/verbose; fixed .git suffix bug in project names
+  Phase 11: Compare Mode,parse_compare_arg() cmd_review_compare() fetches two patchset refs and diffs locally via git_fetch_ref_sha/git_diff
+  Phase 12: Remaining Flags & Bearer Auth,--track (upstream resolution) --update (remote update) --new-changeid (regenerate) --finish (post-push cleanup) AuthType enum bearer token support
+  Phase 13: Completions & Error Handling,GerritError typed enum with is_retryable(); retry with exponential backoff (3 retries 1s/2s/4s); shell completions (bash/zsh/fish); exit code mapping (0/1/2/3/40/128)
 
 in_progress: Nothing
 
 next_steps[4]:
-  Manual testing against a real Gerrit instance (setup push comments version)
+  Manual testing of review subcommand against real Gerrit (download compare list)
   Populate remaining 4 stub design docs (data-model tui-design search-engine sync-engine) — these cover unimplemented features
   Create ADRs for key design decisions as they emerge
   Begin TUI and SQLite work (post-MVP)
 
 decisions_pending[0]:
 
-test_status: 75 tests passing (58 lib + 9 main + 8 integration)
+test_status: 240 tests passing (193 lib + 37 main + 10 integration)
 lint_status: cargo fmt clippy deny all pass clean
 
-handoff_notes[12]:
-  MVP CLI is fully implemented: push comments setup version commands
-  75 tests all passing (58 lib unit + 9 main unit + 8 mockito integration)
+handoff_notes[16]:
+  grt is now a drop-in git-review replacement via busybox argv[0] detection
+  grt review mirrors all git-review flags (-d -l -x -X -N -m -s -t -R -F -w -W -p -P -f -i -u --track --reviewers --cc --hashtags --notify --message)
+  When symlinked as git-review, parses flat flags identically to git-review
+  grt export git-review [--clean] manages the symlink at ~/.local/bin/git-review
+  240 tests all passing (193 lib unit + 37 main unit + 10 mockito integration)
   cargo fmt --check passes
   cargo clippy --workspace --all-targets -- -D warnings passes clean
   cargo deny check passes (advisories ok bans ok licenses ok sources ok)
-  gix upgraded from 0.70 to 0.79 (fixed GHSA-2frx-2596-x5r6 SHA-1 advisory)
-  deny.toml licenses: added MPL-2.0 (option-ext/dirs) Zlib (foldhash/hashbrown) CDLA-Permissive-2.0 (webpki-roots)
-  Rust toolchain 1.85.0 (upgraded from 1.82.0 for edition2024 transitive deps)
+  GerritError typed enum: AuthFailed NotFound ServerError Network with is_retryable()
+  Retry logic: 3 retries with 1s/2s/4s exponential backoff on 5xx and network errors
+  Exit codes: 0=success 1=generic 2=hook 3=malformed 40=network 128=config (git-review compatible)
+  Bearer auth: auth_type field in credentials.toml (basic default, bearer supported)
+  Shell completions: bash zsh fish via clap_complete
   All cargo commands must run via nix develop shell (not rustup)
-  Source tree: lib.rs app.rs config.rs gerrit.rs git.rs push.rs comments.rs hook.rs subprocess.rs + resources/commit-msg
-  5 design docs populated from stub to draft: gerrit-client cli-design config-system git-operations error-handling
-  4 design docs remain as stubs: data-model tui-design search-engine sync-engine (these cover unimplemented features)
+  Source tree: lib.rs app.rs config.rs gerrit.rs git.rs push.rs comments.rs hook.rs subprocess.rs review.rs list.rs export.rs + resources/commit-msg
+  5 design docs updated to reflect git-review parity: gerrit-client cli-design config-system git-operations error-handling

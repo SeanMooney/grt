@@ -8,13 +8,13 @@
 
 grt communicates with Gerrit exclusively through its REST API over HTTP/HTTPS. There is no SSH protocol support -- the REST API is strictly more capable than Gerrit's SSH command interface, and a single protocol path simplifies the client significantly.
 
-The client is built on `reqwest`, an async HTTP client for Rust. It handles Gerrit's XSSI prefix stripping, HTTP Basic authentication with manual base64 encoding, response deserialization via serde, and connection management with configurable timeouts.
+The client is built on `reqwest`, an async HTTP client for Rust. It handles Gerrit's XSSI prefix stripping, HTTP Basic and Bearer token authentication, response deserialization via serde, connection management with configurable timeouts, and retry with exponential backoff on transient failures.
 
 The `GerritClient` struct owns a `reqwest::Client` instance (which provides connection pooling internally) along with the base URL and optional credentials. All public methods are `async` and return `anyhow::Result<T>`.
 
 ## Endpoints
 
-grt implements six Gerrit REST API endpoints, all read-only. Write operations (submitting reviews, setting topics) are deferred to post-MVP.
+grt implements seven Gerrit REST API endpoints, all read-only. Write operations (submitting reviews, setting topics) are deferred to post-MVP.
 
 ### `get_version` -- Server Version
 
@@ -38,7 +38,7 @@ Returns the authenticated user's `AccountInfo`. Used by `grt setup` to verify cr
 GET /a/changes/?q={query}&o=CURRENT_REVISION&o=DETAILED_ACCOUNTS
 ```
 
-Queries changes using [Gerrit's query syntax](https://gerrit-review.googlesource.com/Documentation/user-search.html). The query string is URL-encoded. Always requests `CURRENT_REVISION` and `DETAILED_ACCOUNTS` options to include revision details and full account info in the response.
+Queries changes using Gerrit's query syntax. Used by `grt review -l` (list mode) to find open changes for the current project.
 
 ### `get_change_detail` -- Full Change Info
 
@@ -46,7 +46,15 @@ Queries changes using [Gerrit's query syntax](https://gerrit-review.googlesource
 GET /a/changes/{id}/detail?o=CURRENT_REVISION&o=DETAILED_ACCOUNTS&o=MESSAGES
 ```
 
-Returns detailed information for a single change, including review messages. The `{id}` parameter is URL-encoded and can be a change number, Change-Id, or triplet (`project~branch~Change-Id`). Used by `grt comments` to fetch the change metadata and message history.
+Returns detailed information for a single change, including review messages. Used by `grt comments` to fetch the change metadata and message history.
+
+### `get_change_all_revisions` -- Change with All Patchsets
+
+```
+GET /a/changes/{id}/detail?o=ALL_REVISIONS&o=DETAILED_ACCOUNTS
+```
+
+Returns change detail with all revision data. Used by download (`-d`), cherry-pick (`-x`, `-X`, `-N`), and compare (`-m`) modes to access specific patchset refs.
 
 ### `get_change_comments` / `get_revision_comments` -- Inline Comments
 
@@ -55,7 +63,7 @@ GET /a/changes/{id}/comments
 GET /a/changes/{id}/revisions/{revision}/comments
 ```
 
-Returns inline comments organized by file path. `get_change_comments` returns comments across all revisions; `get_revision_comments` scopes to a specific patchset. The response type is `HashMap<String, Vec<CommentInfo>>` where keys are file paths.
+Returns inline comments organized by file path.
 
 ### `get_robot_comments` -- Automated Comments
 
@@ -63,31 +71,41 @@ Returns inline comments organized by file path. `get_change_comments` returns co
 GET /a/changes/{id}/robotcomments
 ```
 
-Returns automated/CI comments in the same format as human comments. Used when `--include-robot-comments` is passed to `grt comments`.
+Returns automated/CI comments in the same format as human comments.
 
 ### Endpoints Not Yet Implemented
 
-The following endpoints from the stub are not implemented in the MVP:
-
 - **Submit Review** (`POST /changes/{id}/revisions/{rev}/review`) -- planned for TUI mode
 - **Set Topic/Hashtags** -- planned for future write operations
-- **Cherry-pick** (`POST /changes/{id}/revisions/{rev}/cherrypick`) -- planned post-MVP
 
 ## Authentication
 
-### HTTP Basic Auth
+### HTTP Basic Auth (Default)
 
 Authentication uses HTTP Basic with manual base64 encoding. When credentials are present, the client:
 
 1. Adds the `/a/` prefix to all endpoint paths (Gerrit's convention for authenticated access)
 2. Constructs an `Authorization: Basic <base64(username:password)>` header
 
+### Bearer Token Auth
+
+When `auth_type = "bearer"` is configured in `credentials.toml`, the client uses Bearer token authentication:
+
+1. Adds the `/a/` prefix (same as Basic)
+2. Constructs an `Authorization: Bearer <token>` header, using the password field as the token
+
 ```rust
 fn auth_headers(&self) -> HeaderMap {
     let mut headers = HeaderMap::new();
     if let Some(ref creds) = self.credentials {
-        let encoded = base64_encode(&format!("{}:{}", creds.username, creds.password));
-        if let Ok(val) = HeaderValue::from_str(&format!("Basic {encoded}")) {
+        let header_value = match creds.auth_type {
+            AuthType::Bearer => format!("Bearer {}", creds.password),
+            AuthType::Basic => {
+                let encoded = base64_encode(&format!("{}:{}", creds.username, creds.password));
+                format!("Basic {encoded}")
+            }
+        };
+        if let Ok(val) = HeaderValue::from_str(&header_value) {
             headers.insert(AUTHORIZATION, val);
         }
     }
@@ -101,18 +119,7 @@ Rather than adding a dependency for base64 encoding (which is the only use case)
 
 ### Credential Redaction
 
-The `Credentials` struct has a custom `Debug` implementation that redacts the password field, preventing accidental credential exposure in debug logs:
-
-```rust
-impl std::fmt::Debug for Credentials {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Credentials")
-            .field("username", &self.username)
-            .field("password", &"[REDACTED]")
-            .finish()
-    }
-}
-```
+The `Credentials` struct has a custom `Debug` implementation that redacts the password field, preventing accidental credential exposure in debug logs.
 
 ### TLS Enforcement
 
@@ -135,8 +142,6 @@ pub struct AccountInfo {
 }
 ```
 
-The `_account_id` field uses Gerrit's underscore-prefixed convention for internal fields, mapped via `#[serde(rename)]`.
-
 ### ChangeInfo
 
 ```rust
@@ -147,6 +152,7 @@ pub struct ChangeInfo {
     pub change_id: Option<String>,
     pub subject: Option<String>,
     pub status: Option<String>,
+    pub topic: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
     #[serde(rename = "_number")]
@@ -160,7 +166,7 @@ pub struct ChangeInfo {
 }
 ```
 
-The `revisions` field is a map from commit SHA to `RevisionInfo`, present only when `CURRENT_REVISION` or `ALL_REVISIONS` is requested.
+The `revisions` field is a map from commit SHA to `RevisionInfo`, present only when `CURRENT_REVISION` or `ALL_REVISIONS` is requested. The `topic` field is used by list mode's verbose output.
 
 ### RevisionInfo and CommitInfo
 
@@ -172,97 +178,81 @@ pub struct RevisionInfo {
     pub git_ref: Option<String>,
     pub commit: Option<CommitInfo>,
 }
-
-pub struct CommitInfo {
-    pub subject: Option<String>,
-    pub message: Option<String>,
-    pub author: Option<GitPersonInfo>,
-    pub committer: Option<GitPersonInfo>,
-}
 ```
 
-The `ref` field requires renaming since `ref` is a Rust keyword.
+The `ref` field (renamed as `git_ref` since `ref` is a Rust keyword) provides the fetch ref (e.g., `refs/changes/45/12345/1`) used by download and cherry-pick modes.
 
-### CommentInfo
+### CommentInfo and ChangeMessageInfo
 
-```rust
-pub struct CommentInfo {
-    pub id: Option<String>,
-    pub path: Option<String>,
-    pub line: Option<i32>,
-    pub range: Option<CommentRange>,
-    pub in_reply_to: Option<String>,
-    pub message: Option<String>,
-    pub updated: Option<String>,
-    pub author: Option<AccountInfo>,
-    pub patch_set: Option<i32>,
-    pub unresolved: Option<bool>,
-}
-```
-
-The `in_reply_to` field links to the parent comment's `id`, forming reply chains that the `comments` module resolves into threaded conversations.
-
-### ChangeMessageInfo
-
-```rust
-pub struct ChangeMessageInfo {
-    pub id: Option<String>,
-    pub author: Option<AccountInfo>,
-    pub date: Option<String>,
-    pub message: Option<String>,
-    #[serde(rename = "_revision_number")]
-    pub revision_number: Option<i32>,
-}
-```
+Standard Gerrit comment types used by the comments command. See `gerrit.rs` for full definitions.
 
 ## Error Handling
 
-### HTTP Status Errors
+### Typed Error Enum
 
-Non-2xx responses are treated as errors. The client reads the response body (which often contains a human-readable Gerrit error message) and includes it in the error:
+The `GerritError` enum provides typed errors for the Gerrit client:
 
 ```rust
-if !status.is_success() {
-    let body = resp.text().await.unwrap_or_default();
-    anyhow::bail!("Gerrit API error ({}): {}", status, body);
+#[derive(Debug, thiserror::Error)]
+pub enum GerritError {
+    #[error("authentication failed (HTTP {status})")]
+    AuthFailed { status: u16 },
+
+    #[error("not found (HTTP 404)")]
+    NotFound,
+
+    #[error("server error (HTTP {status}): {body}")]
+    ServerError { status: u16, body: String },
+
+    #[error("network error: {0}")]
+    Network(String),
 }
 ```
 
-### Response Parsing
+Each variant classifies the failure type, enabling callers to match on specific error conditions (e.g., for exit code mapping).
 
-JSON deserialization errors are wrapped with context describing which operation failed:
+### Retry with Exponential Backoff
+
+The internal `get()` method wraps `get_once()` with automatic retry:
+
+- **Retryable errors:** 5xx server errors and network failures (`GerritError::is_retryable()`)
+- **Non-retryable errors:** 401/403 auth failures, 404 not found, 4xx client errors
+- **Max retries:** 3 attempts
+- **Backoff:** 1s, 2s, 4s (exponential, `1 << attempt`)
+- **Logging:** Each retry logs a warning with attempt count and delay
 
 ```rust
-serde_json::from_str(&body).context("parsing change detail")
+async fn get(&self, path: &str) -> Result<String> {
+    let url = self.api_url(path)?;
+    let mut last_err = None;
+
+    for attempt in 0..=MAX_RETRIES {
+        match self.get_once(&url).await {
+            Ok(body) => return Ok(body),
+            Err(e) if e.is_retryable() && attempt < MAX_RETRIES => {
+                let delay = Duration::from_secs(1 << attempt);
+                warn!("request to {} failed (attempt {}/{}): {}, retrying in {}s",
+                    path, attempt + 1, MAX_RETRIES + 1, e, delay.as_secs());
+                tokio::time::sleep(delay).await;
+                last_err = Some(e);
+            }
+            Err(e) => {
+                return Err(e).context(format!("Gerrit API request to {path}"));
+            }
+        }
+    }
+
+    Err(last_err.unwrap()).context(format!("Gerrit API request to {path} (exhausted retries)"))
+}
 ```
 
 ### XSSI Prefix Stripping
 
-Gerrit prepends `)]}'\n` (or `)]}\n` without the quote) to JSON responses as an XSSI prevention measure. The `strip_xssi_prefix` function handles this dynamically rather than hardcoding a character count:
-
-```rust
-pub fn strip_xssi_prefix(body: &str) -> String {
-    if let Some(newline_pos) = body.find('\n') {
-        let prefix = &body[..newline_pos];
-        if prefix.starts_with(")]}") {
-            return body[newline_pos + 1..].to_string();
-        }
-    }
-    body.to_string()
-}
-```
-
-This approach is more robust than git-review's `request.text[4:]` which hardcodes 4 characters. It handles variations in the prefix (with or without the trailing quote) and passes through responses that lack a prefix entirely.
-
-### No Retry Logic
-
-The MVP client does not implement retry or exponential backoff. Failed requests return an error immediately. Retry logic is planned for post-MVP, particularly for the sync engine where transient 5xx errors and connection resets should be retried.
+Gerrit prepends `)]}'\n` (or `)]}\n` without the quote) to JSON responses as an XSSI prevention measure. The `strip_xssi_prefix` function handles this dynamically by finding the first newline and checking for the `)]}` prefix. This is more robust than git-review's hardcoded `text[4:]`.
 
 ## Connection Management
 
 ### Client Configuration
-
-The `reqwest::Client` is configured at construction time with:
 
 | Setting | Value | Rationale |
 |---------|-------|-----------|
@@ -270,45 +260,25 @@ The `reqwest::Client` is configured at construction time with:
 | Request timeout | 30 seconds | Bound total request duration including response body |
 | User-Agent | `grt/{version}` | Identifies the client in Gerrit access logs |
 
-```rust
-let client = reqwest::Client::builder()
-    .connect_timeout(CONNECT_TIMEOUT)
-    .timeout(REQUEST_TIMEOUT)
-    .user_agent(format!("grt/{}", env!("CARGO_PKG_VERSION")))
-    .build()
-    .context("building HTTP client")?;
-```
-
 ### Connection Pooling
 
-`reqwest::Client` internally maintains a connection pool with keep-alive. Multiple requests to the same Gerrit server reuse TCP connections, reducing latency for sequences of API calls (e.g., fetching change detail then comments).
-
-### URL Construction
-
-The `api_url` method constructs full API URLs by joining the endpoint path onto the base URL. When credentials are present, the `/a` prefix is automatically prepended for Gerrit's authenticated endpoints:
-
-```rust
-fn api_url(&self, path: &str) -> Result<Url> {
-    let prefix = if self.credentials.is_some() { "/a" } else { "" };
-    let full_path = format!("{}{}", prefix, path);
-    self.base_url.join(&full_path).context("constructing API URL")
-}
-```
+`reqwest::Client` internally maintains a connection pool with keep-alive. Multiple requests to the same Gerrit server reuse TCP connections.
 
 ## Divergences from Ref-Specs
 
 ### vs. git-review (`git-review-gerrit-api.md`)
 
-- **REST-only**: git-review supports both SSH and HTTP protocols, choosing based on the remote URL scheme. grt uses REST exclusively -- SSH adds no API capabilities that REST lacks.
-- **No 401-retry**: git-review makes an unauthenticated request first, then retries with credentials on 401. grt sends credentials upfront when available, avoiding the round-trip.
-- **Dynamic XSSI stripping**: git-review hardcodes `text[4:]`. grt finds the first newline and checks for the `)]}` prefix, handling format variations gracefully.
-- **No response normalization**: git-review translates HTTP response format to match SSH output. grt works directly with the REST API's native JSON structure.
-- **Manual base64**: git-review uses Python's standard library base64. grt includes a minimal encoder to avoid adding a crate dependency for a single use case.
+- **REST-only**: git-review supports both SSH and HTTP protocols. grt uses REST exclusively.
+- **No 401-retry**: git-review makes an unauthenticated request first, then retries with credentials on 401. grt sends credentials upfront when available.
+- **Dynamic XSSI stripping**: git-review hardcodes `text[4:]`. grt finds the first newline and checks for the `)]}` prefix.
+- **Retry with backoff**: git-review does not retry on transient errors. grt retries 5xx and network failures with exponential backoff.
+- **Bearer auth support**: git-review supports basic auth only. grt supports both Basic and Bearer token authentication.
+- **Typed errors**: git-review uses generic exceptions. grt uses a `GerritError` enum that classifies failures by type, enabling retryability checks and exit code mapping.
 - **Timeouts**: git-review sets no timeouts. grt configures both connect (10s) and request (30s) timeouts.
 
 ### vs. gertty (`gertty-sync-system.md`)
 
-- **No sync engine**: gertty's `GerritClient` is deeply integrated with its sync task system (27 task types, priority queue, offline handling). grt's client is a standalone HTTP layer with no sync logic -- sync will be added post-MVP.
-- **No retry/backoff**: gertty retries on connection errors with a 30-second sleep. grt does not retry in the MVP.
-- **No version-gated features**: gertty checks the server version to gate features (robot comments require >= 2.14.0). grt does not perform version checks.
-- **Narrower endpoint surface**: gertty uses dozens of endpoints (projects, branches, labels, checks, edits). grt uses six read-only endpoints.
+- **No sync engine**: gertty's `GerritClient` is deeply integrated with its sync task system. grt's client is a standalone HTTP layer.
+- **Structured retry**: gertty retries with a fixed 30-second sleep. grt uses exponential backoff with a retryability classifier.
+- **No version-gated features**: gertty checks the server version to gate features. grt does not perform version checks.
+- **Narrower endpoint surface**: gertty uses dozens of endpoints. grt uses seven read-only endpoints.
