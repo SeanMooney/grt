@@ -329,7 +329,13 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         anyhow::bail!("compare mode (-m) is not yet implemented");
     }
     if args.list > 0 {
-        anyhow::bail!("list mode (-l) is not yet implemented");
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let app = App::new(work_dir, &cli_overrides)?;
+        return review::cmd_review_list(&app, args.branch.as_deref(), args.list >= 2).await;
     }
 
     // Default mode: push

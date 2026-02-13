@@ -7,6 +7,7 @@ use tracing::debug;
 
 use crate::app::App;
 use crate::gerrit::{ChangeInfo, RevisionInfo};
+use crate::list;
 use crate::subprocess;
 
 /// ReviewArgs mirrors git-review's exact flag set.
@@ -382,6 +383,31 @@ pub async fn cmd_review_cherrypickonly(app: &mut App, change_arg: &str) -> Resul
     subprocess::git_cherry_pick_no_commit("FETCH_HEAD", &root)?;
     eprintln!("Change applied to working directory.");
 
+    Ok(())
+}
+
+/// List open changes on Gerrit.
+///
+/// Queries `status:open project:<project>` (and `branch:<branch>` if specified).
+/// Brief mode (`-l`) shows number, branch, subject.
+/// Verbose mode (`-ll`) adds a topic column.
+pub async fn cmd_review_list(app: &App, branch: Option<&str>, verbose: bool) -> Result<()> {
+    let query = list::build_list_query(&app.config.project, branch);
+    debug!("listing changes with query: {}", query);
+
+    let changes = app.gerrit.query_changes(&query).await?;
+
+    if changes.is_empty() {
+        return Ok(());
+    }
+
+    let output = if verbose {
+        list::format_reviews_verbose(&changes)
+    } else {
+        list::format_reviews_text(&changes)
+    };
+
+    print!("{output}");
     Ok(())
 }
 

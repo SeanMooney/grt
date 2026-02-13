@@ -154,6 +154,15 @@ pub fn parse_gitreview(content: &str) -> Result<HashMap<String, String>> {
     Ok(values)
 }
 
+/// Strip a trailing `.git` suffix from a project name.
+///
+/// Gerrit project names in `.gitreview` files often include `.git` (because they
+/// double as git remote paths), but the Gerrit REST API expects the bare project
+/// name without the suffix. This matches git-review's behavior.
+fn strip_git_suffix(project: &str) -> String {
+    project.strip_suffix(".git").unwrap_or(project).to_string()
+}
+
 /// Load configuration by layering sources: .gitreview, grt config, git config, CLI overrides.
 pub fn load_config(
     repo_root: &Path,
@@ -176,7 +185,7 @@ pub fn load_config(
             config.ssh_port = Some(port.parse::<u16>().context("parsing port in .gitreview")?);
         }
         if let Some(project) = values.get("project") {
-            config.project = project.clone();
+            config.project = strip_git_suffix(project);
         }
         if let Some(branch) = values.get("defaultbranch") {
             config.branch = branch.clone();
@@ -204,7 +213,7 @@ pub fn load_config(
                     config.http_port = Some(port as u16);
                 }
                 if let Some(project) = gerrit.get("project").and_then(|v| v.as_str()) {
-                    config.project = project.to_string();
+                    config.project = strip_git_suffix(project);
                 }
                 if let Some(branch) = gerrit.get("branch").and_then(|v| v.as_str()) {
                     config.branch = branch.to_string();
@@ -230,7 +239,7 @@ pub fn load_config(
         );
     }
     if let Some(project) = git_config_value("gitreview.project") {
-        config.project = project;
+        config.project = strip_git_suffix(&project);
     }
     if let Some(branch) = git_config_value("gitreview.branch") {
         config.branch = branch;
@@ -247,7 +256,7 @@ pub fn load_config(
         config.http_port = Some(port);
     }
     if let Some(ref project) = cli.project {
-        config.project = project.clone();
+        config.project = strip_git_suffix(project);
     }
     if let Some(ref branch) = cli.branch {
         config.branch = branch.clone();
@@ -529,6 +538,41 @@ password = "token-2"
             result,
             Some(("bob".into(), "token-2".into())),
             "should match second server entry"
+        );
+    }
+
+    #[test]
+    fn strip_git_suffix_removes_dotgit() {
+        assert_eq!(
+            strip_git_suffix("openstack/watcher.git"),
+            "openstack/watcher"
+        );
+    }
+
+    #[test]
+    fn strip_git_suffix_no_suffix() {
+        assert_eq!(strip_git_suffix("openstack/watcher"), "openstack/watcher");
+    }
+
+    #[test]
+    fn strip_git_suffix_only_git() {
+        assert_eq!(strip_git_suffix(".git"), "");
+    }
+
+    #[test]
+    fn project_git_suffix_stripped_in_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(
+            &gitreview,
+            "[gerrit]\nhost=review.example.com\nproject=openstack/nova.git\n",
+        )
+        .unwrap();
+
+        let config = load_config(dir.path(), |_| None, &CliOverrides::default()).unwrap();
+        assert_eq!(
+            config.project, "openstack/nova",
+            ".git suffix should be stripped from project name"
         );
     }
 }

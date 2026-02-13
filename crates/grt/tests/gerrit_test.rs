@@ -2,6 +2,7 @@
 // Copyright (c) 2026 grt contributors
 
 use grt::gerrit::{Credentials, GerritClient};
+use grt::list;
 use url::Url;
 
 fn test_client(server_url: &str) -> GerritClient {
@@ -223,6 +224,63 @@ async fn get_change_comments_success() {
     let comments = client.get_change_comments("12345").await.unwrap();
     assert!(comments.contains_key("src/main.rs"));
     assert_eq!(comments["src/main.rs"].len(), 1);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn query_changes_with_project_filter() {
+    let mut server = mockito::Server::new_async().await;
+    let body = r#")]}'
+[
+  {
+    "id": "proj~main~I111",
+    "project": "my/project",
+    "branch": "main",
+    "subject": "First change",
+    "status": "NEW",
+    "_number": 100,
+    "owner": { "_account_id": 1, "name": "Alice" }
+  },
+  {
+    "id": "proj~main~I222",
+    "project": "my/project",
+    "branch": "develop",
+    "subject": "Second change",
+    "status": "NEW",
+    "topic": "feature-x",
+    "_number": 200,
+    "owner": { "_account_id": 2, "name": "Bob" }
+  }
+]"#;
+    let mock = server
+        .mock(
+            "GET",
+            mockito::Matcher::Regex(
+                r"/changes/\?q=status%3Aopen%20project%3Amy%2Fproject".to_string(),
+            ),
+        )
+        .with_status(200)
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let client = test_client(&server.url());
+    let query = list::build_list_query("my/project", None);
+    let changes = client.query_changes(&query).await.unwrap();
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].number, Some(100));
+    assert_eq!(changes[1].number, Some(200));
+
+    // Verify formatting
+    let text = list::format_reviews_text(&changes);
+    assert!(text.contains("100"));
+    assert!(text.contains("200"));
+    assert!(text.contains("First change"));
+    assert!(text.contains("Second change"));
+
+    let verbose = list::format_reviews_verbose(&changes);
+    assert!(verbose.contains("feature-x"));
+
     mock.assert_async().await;
 }
 
