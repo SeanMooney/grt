@@ -1,6 +1,6 @@
 # grt Architecture
 
-**Related ref-specs:** `ref-specs/ca-bhfuil-patterns.md`, `ref-specs/gertty-sync-system.md`, `ref-specs/gertty-data-model.md`, `ref-specs/gertty-config-and-ui.md`
+**Related ref-specs:** `../ref-specs/ca-bhfuil-patterns.md`, `../ref-specs/gertty-sync-system.md`, `../ref-specs/gertty-data-model.md`, `../ref-specs/gertty-config-and-ui.md`
 **Status:** Draft
 
 For technology selections and crate rationale, see [tech-stack.md](tech-stack.md). This document covers how those technologies compose into a working system.
@@ -14,23 +14,13 @@ grt is an async-first, local-first, dual-interface tool for managing Git and Ger
 - **Async-first.** All I/O (HTTP, SQLite, git) is non-blocking at the call site. Blocking operations (git2, rusqlite) run on dedicated blocking threads via `tokio::task::spawn_blocking`. The main event loop never blocks.
 - **Local-first.** The SQLite database is the single source of truth for the UI. The user never waits for a network round-trip to view data. Background sync keeps the local cache current, and pending local mutations are persisted in the database so they survive restarts.
 - **Dual-interface.** The same `App` struct serves both TUI and CLI modes. The TUI wraps it in an event loop with rendering; the CLI calls methods directly and prints results. No business logic lives in either interface layer.
-- **App as orchestrator.** Inspired by the ca-bhfuil analysis ([ref-specs/ca-bhfuil-patterns.md](ref-specs/ca-bhfuil-patterns.md)), grt consolidates ownership into a single `App` struct rather than distributing it across multiple manager classes. Rust's ownership model makes this natural — `App` owns the database pool, config, and gerrit client, and lends references to subsystems that need them. No global singletons, no service locators, no runtime ownership tracking.
+- **App as orchestrator.** Inspired by the ca-bhfuil analysis ([ref-specs/ca-bhfuil-patterns.md](../ref-specs/ca-bhfuil-patterns.md)), grt consolidates ownership into a single `App` struct rather than distributing it across multiple manager classes. Rust's ownership model makes this natural — `App` owns the database pool, config, and gerrit client, and lends references to subsystems that need them. No global singletons, no service locators, no runtime ownership tracking.
 
 ## Module Boundaries
 
 Each module has a single responsibility, a defined public API, and explicit dependencies. The module layout matches `src/` files one-to-one.
 
-```
-src/
-├── main.rs      Entry point, CLI parsing, logging setup
-├── app.rs       App struct, orchestration, shared state
-├── db.rs        SQLite schema, queries, migrations
-├── gerrit.rs    Gerrit REST client, auth, response parsing
-├── git.rs       git2 operations, cherry-pick, status
-├── notedb.rs    NoteDb ref parsing (Gerrit metadata in git)
-├── fuzzy.rs     nucleo-matcher integration, search API
-└── tui.rs       ratatui event loop, views, rendering
-```
+See [repo-layout.md](../adopted/repo-layout.md) for the source file layout.
 
 ### main.rs — Entry Point
 
@@ -65,7 +55,7 @@ src/
 
 **Design note:** `App` is not `Clone`. The TUI borrows `&App` (via `tokio-scoped`), and CLI commands receive `&App`. Long-running background tasks that outlive a scope receive owned handles (e.g., `GerritClient` clone, database pool clone).
 
-**Ref-spec influence:** ca-bhfuil's `ManagerFactory` + `ManagerRegistry` pattern is replaced by direct ownership in `App`. See [ref-specs/ca-bhfuil-patterns.md § grt Divergences](ref-specs/ca-bhfuil-patterns.md#app-struct-as-central-orchestrator-vs-multiple-managers).
+**Ref-spec influence:** ca-bhfuil's `ManagerFactory` + `ManagerRegistry` pattern is replaced by direct ownership in `App`. See [ref-specs/ca-bhfuil-patterns.md § grt Divergences](../ref-specs/ca-bhfuil-patterns.md#app-struct-as-central-orchestrator-vs-multiple-managers).
 
 ### db.rs — Data Layer
 
@@ -84,7 +74,7 @@ src/
 
 **Dependencies:** None (leaf module).
 
-**Schema:** Adapted from gertty's 18-table model ([ref-specs/gertty-data-model.md](ref-specs/gertty-data-model.md)) with simplifications:
+**Schema:** Adapted from gertty's 18-table model ([ref-specs/gertty-data-model.md](../ref-specs/gertty-data-model.md)) with simplifications:
 - Pending operations consolidated into a `pending_operation` table instead of scattered `pending_*` booleans
 - `ON DELETE CASCADE` foreign keys instead of ORM-managed cascades
 - Status columns use CHECK constraints instead of free-form strings
@@ -106,7 +96,7 @@ src/
 
 **Dependencies:** None (leaf module — uses only reqwest and serde).
 
-**Design note:** REST-only, no SSH. Strips Gerrit's XSSI prefix dynamically. Implements retry with exponential backoff for transient errors. See [ref-specs/git-review-gerrit-api.md § grt Divergences](ref-specs/git-review-gerrit-api.md#grt-divergences).
+**Design note:** REST-only, no SSH. Strips Gerrit's XSSI prefix dynamically. Implements retry with exponential backoff for transient errors. See [ref-specs/git-review-gerrit-api.md § grt Divergences](../ref-specs/git-review-gerrit-api.md#grt-divergences).
 
 ### git.rs — Git Operations
 
@@ -151,7 +141,7 @@ src/
 
 **Dependencies:** None (leaf module).
 
-**Design note:** Unlike gertty which builds SQLAlchemy expressions directly during parsing, grt separates parsing (producing a `SearchExpr` AST) from query planning (compiling the AST to SQL). This enables validation, optimization, and fuzzy matching integration. See [ref-specs/gertty-search-language.md § grt Divergences](ref-specs/gertty-search-language.md#grt-divergences).
+**Design note:** Unlike gertty which builds SQLAlchemy expressions directly during parsing, grt separates parsing (producing a `SearchExpr` AST) from query planning (compiling the AST to SQL). This enables validation, optimization, and fuzzy matching integration. See [ref-specs/gertty-search-language.md § grt Divergences](../ref-specs/gertty-search-language.md#grt-divergences).
 
 ### tui.rs — Terminal UI
 
@@ -164,7 +154,7 @@ src/
 
 **Dependencies:** `app` (borrows `&App`).
 
-**Design note:** Immediate-mode rendering via ratatui (not retained-mode widget tree like gertty/urwid). Application state is the source of truth; views are pure render functions. View stack navigation follows gertty's push/pop model but without widget objects. See [ref-specs/gertty-config-and-ui.md § grt Divergences](ref-specs/gertty-config-and-ui.md#ratatui-vs-urwid-immediate-mode-vs-widget-tree).
+**Design note:** Immediate-mode rendering via ratatui (not retained-mode widget tree like gertty/urwid). Application state is the source of truth; views are pure render functions. View stack navigation follows gertty's push/pop model but without widget objects. See [ref-specs/gertty-config-and-ui.md § grt Divergences](../ref-specs/gertty-config-and-ui.md#ratatui-vs-urwid-immediate-mode-vs-widget-tree).
 
 ## Data Flow
 
@@ -186,7 +176,7 @@ db.rs ─── upsert_change() ───► SQLite (INSERT ... ON CONFLICT DO U
 Sync event ───► mpsc channel ───► TUI refresh (if running)
 ```
 
-Sync is driven by a background task (adapted from gertty's sync engine, see [ref-specs/gertty-sync-system.md](ref-specs/gertty-sync-system.md)):
+Sync is driven by a background task (adapted from gertty's sync engine, see [ref-specs/gertty-sync-system.md](../ref-specs/gertty-sync-system.md)):
 1. A scheduler task maintains a priority queue of sync tasks
 2. Worker tasks execute sync operations concurrently (bounded by semaphore)
 3. Each sync task fetches data from Gerrit, upserts to SQLite, and notifies the UI

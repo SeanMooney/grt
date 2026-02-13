@@ -1,6 +1,6 @@
 # grt TUI Design
 
-**Related ref-specs:** `ref-specs/gertty-config-and-ui.md`
+**Related ref-specs:** `../ref-specs/gertty-config-and-ui.md`
 **Status:** Stub
 
 ## Overview

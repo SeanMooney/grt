@@ -1,6 +1,6 @@
 # grt Search Engine
 
-**Related ref-specs:** `ref-specs/gertty-search-language.md`
+**Related ref-specs:** `../ref-specs/gertty-search-language.md`
 **Status:** Stub
 
 ## Overview

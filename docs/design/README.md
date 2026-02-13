@@ -2,10 +2,24 @@
 
 Navigation hub for all design documentation. Start here to find what you need.
 
+## Document Lifecycle
+
+Design docs follow a two-stage lifecycle:
+
+1. **`draft/`** — Work in progress. May be incomplete or contain open questions.
+2. **`adopted/`** — Implemented and authoritative. Content reflects actual practice.
+
+A doc moves from draft to adopted via `git mv` when its design is implemented. See
+`adopted/repo-layout.md` for the full directory structure.
+
 ## Document Map
 
 | Path | Purpose | Status |
 |------|---------|--------|
+| **Adopted** | | |
+| `adopted/repo-layout.md` | Repository directory structure — single source of truth | Adopted |
+| `adopted/rust-conventions.md` | Rust coding standards | Adopted |
+| `adopted/patterns.md` | Pattern library (grows over time) | Adopted |
 | **Reference Specs** | | |
 | `ref-specs/gertty-data-model.md` | Gertty SQLAlchemy schema: 18+ tables, relationships, indices | Complete |
 | `ref-specs/gertty-sync-system.md` | Gertty sync: priority queue, 30+ task types, offline handling | Complete |
@@ -14,18 +28,19 @@ Navigation hub for all design documentation. Start here to find what you need.
 | `ref-specs/git-review-workflow.md` | git-review push workflow, hooks, rebase, config layers | Complete |
 | `ref-specs/git-review-gerrit-api.md` | git-review Gerrit protocols: SSH + HTTP, auth methods | Complete |
 | `ref-specs/ca-bhfuil-patterns.md` | ca-bhfuil manager pattern, async, CLI separation | Complete |
-| **Design Docs** | | |
-| `architecture.md` | grt system design, module boundaries, data flow | Draft |
-| `build-and-release.md` | Build, CI, cross-compilation, SBOM, signing, release | Draft |
-| `data-model.md` | Unified SQLite schema (from gertty + extensions) | Stub |
-| `gerrit-client.md` | REST API client, auth, sync endpoints | Stub |
-| `cli-design.md` | clap command tree, flags, output formats | Stub |
-| `tui-design.md` | ratatui views, navigation, event loop | Stub |
-| `search-engine.md` | Query language + fuzzy search design | Stub |
-| `config-system.md` | TOML config, layered config, multi-server | Stub |
-| `git-operations.md` | git2 ops, NoteDb reading, hook management | Stub |
-| `sync-engine.md` | Async sync, task scheduling, offline mode | Stub |
-| `error-handling.md` | Error types, recovery, user-facing messages | Stub |
+| **Design Docs (Draft)** | | |
+| `draft/architecture.md` | grt system design, module boundaries, data flow | Draft |
+| `draft/build-and-release.md` | Build, CI, cross-compilation, SBOM, signing, release | Draft |
+| `draft/tech-stack.md` | Technology selections and full architecture spec | Draft |
+| `draft/data-model.md` | Unified SQLite schema (from gertty + extensions) | Stub |
+| `draft/gerrit-client.md` | REST API client, auth, sync endpoints | Stub |
+| `draft/cli-design.md` | clap command tree, flags, output formats | Stub |
+| `draft/tui-design.md` | ratatui views, navigation, event loop | Stub |
+| `draft/search-engine.md` | Query language + fuzzy search design | Stub |
+| `draft/config-system.md` | TOML config, layered config, multi-server | Stub |
+| `draft/git-operations.md` | git2 ops, NoteDb reading, hook management | Stub |
+| `draft/sync-engine.md` | Async sync, task scheduling, offline mode | Stub |
+| `draft/error-handling.md` | Error types, recovery, user-facing messages | Stub |
 | **Decisions** | | |
 | `decisions/` | Architecture Decision Records | Index only |
 
@@ -45,7 +60,9 @@ How reference project analysis feeds into grt design.
 
 ## Reading Paths
 
-**Starting a new module?** Read `architecture.md` first, then the relevant design doc.
+**Starting a new module?** Read `draft/architecture.md` first, then the relevant design doc.
+
+**Understanding the repo structure?** Read `adopted/repo-layout.md`.
 
 **Understanding a design decision?** Check `decisions/` for ADRs, then the relevant design doc for context.
 
@@ -53,15 +70,15 @@ How reference project analysis feeds into grt design.
 
 | Task Area | Read In Order |
 |-----------|--------------|
-| Data layer | gertty-data-model → data-model → sync-engine |
-| Gerrit integration | git-review-gerrit-api → gertty-sync-system → gerrit-client → sync-engine |
-| Search | gertty-search-language → search-engine |
-| TUI | gertty-config-and-ui → tui-design → architecture |
-| CLI | git-review-workflow → cli-design |
-| Git operations | git-review-workflow → git-operations |
-| Configuration | gertty-config-and-ui → config-system |
-| Architecture | ca-bhfuil-patterns → architecture |
-| Build & release | build-and-release → tech-stack (crate context) |
+| Data layer | gertty-data-model → draft/data-model → draft/sync-engine |
+| Gerrit integration | git-review-gerrit-api → gertty-sync-system → draft/gerrit-client → draft/sync-engine |
+| Search | gertty-search-language → draft/search-engine |
+| TUI | gertty-config-and-ui → draft/tui-design → draft/architecture |
+| CLI | git-review-workflow → draft/cli-design |
+| Git operations | git-review-workflow → draft/git-operations |
+| Configuration | gertty-config-and-ui → draft/config-system |
+| Architecture | ca-bhfuil-patterns → draft/architecture |
+| Build & release | draft/build-and-release → draft/tech-stack (crate context) |
 
 ## Relationships
 

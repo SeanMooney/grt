@@ -1,6 +1,6 @@
 # Reference Project Specifications
 
-These documents capture how the Python reference projects work. They are **descriptive** (observational), not **prescriptive** — grt makes its own design decisions in the design docs one level up.
+These documents capture how the Python reference projects work. They are **descriptive** (observational), not **prescriptive** — grt makes its own design decisions in the design docs in `../draft/` and `../adopted/`.
 
 ## Reference Projects
 

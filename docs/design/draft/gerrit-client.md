@@ -1,6 +1,6 @@
 # grt Gerrit Client
 
-**Related ref-specs:** `ref-specs/git-review-gerrit-api.md`, `ref-specs/gertty-sync-system.md`
+**Related ref-specs:** `../ref-specs/git-review-gerrit-api.md`, `../ref-specs/gertty-sync-system.md`
 **Status:** Stub
 
 ## Overview

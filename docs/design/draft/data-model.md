@@ -1,6 +1,6 @@
 # grt Data Model
 
-**Related ref-specs:** `ref-specs/gertty-data-model.md`
+**Related ref-specs:** `../ref-specs/gertty-data-model.md`
 **Status:** Stub
 
 ## Overview

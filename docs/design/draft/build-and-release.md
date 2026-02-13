@@ -27,40 +27,8 @@ but no GitHub Actions compute is used for any build, test, or release workload.
 
 ## Repository Structure
 
-The layout below shows the files and directories directly relevant to building, releasing, and
-compliance. The internal structure of individual crates is defined in `tech-stack.md`.
-
-```
-grt/
-├── Cargo.toml              # workspace root
-├── Cargo.lock              # committed — essential for reproducible builds
-├── rust-toolchain.toml     # pins the exact Rust toolchain version
-├── deny.toml               # cargo-deny policy: licenses, advisories, bans
-├── release.toml            # cargo-release configuration
-├── flake.nix               # Nix flake: dev shell and reproducible build
-├── flake.lock              # committed — locks all Nix inputs
-├── justfile                # local task runner (wraps common cargo/nix invocations)
-├── CHANGELOG.md            # Keep-a-Changelog format; updated before each release
-├── .cargo/
-│   └── config.toml         # cross-compilation linker overrides and target defaults
-├── crates/
-│   └── */                  # workspace crate layout defined in tech-stack.md
-├── ansible/
-│   ├── inventory/
-│   └── playbooks/
-│       ├── setup-node.yaml
-│       ├── lint.yaml
-│       ├── test.yaml
-│       ├── nix-build.yaml
-│       ├── cross-compile.yaml
-│       ├── sbom.yaml
-│       ├── sign.yaml
-│       ├── integration.yaml
-│       └── release.yaml
-└── zuul.d/
-    ├── jobs.yaml
-    └── project.yaml
-```
+See [repo-layout.md](../adopted/repo-layout.md) for the full directory structure. The internal
+structure of individual crates is defined in `tech-stack.md`.
 
 ### Cargo.lock
 

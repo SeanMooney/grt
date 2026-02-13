@@ -334,17 +334,7 @@ tests/
 
 ### Module Structure
 
-```
-src/
-├── main.rs           # CLI entry point, logging setup
-├── app.rs            # Core App struct, business logic orchestration
-├── db.rs             # Database operations (SQLite)
-├── gerrit.rs         # Gerrit REST API client
-├── git.rs            # Git operations (cherry-pick, status)
-├── notedb.rs         # Gerrit NoteDb reader (Git-based metadata)
-├── fuzzy.rs          # Fuzzy search implementation
-└── tui.rs            # Terminal UI (event loop, rendering)
-```
+See [repo-layout.md](../adopted/repo-layout.md) for the module layout.
 
 ### Component Interaction Diagram
 

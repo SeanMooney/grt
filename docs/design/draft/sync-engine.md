@@ -1,6 +1,6 @@
 # grt Sync Engine
 
-**Related ref-specs:** `ref-specs/gertty-data-model.md`, `ref-specs/gertty-sync-system.md`
+**Related ref-specs:** `../ref-specs/gertty-data-model.md`, `../ref-specs/gertty-sync-system.md`
 **Status:** Stub
 
 ## Overview

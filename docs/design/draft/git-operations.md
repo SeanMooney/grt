@@ -1,6 +1,6 @@
 # grt Git Operations
 
-**Related ref-specs:** `ref-specs/git-review-workflow.md`
+**Related ref-specs:** `../ref-specs/git-review-workflow.md`
 **Status:** Stub
 
 ## Overview
