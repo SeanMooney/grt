@@ -12,11 +12,22 @@ use url::Url;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Credentials for HTTP Basic authentication.
+/// Type of HTTP authentication to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AuthType {
+    /// HTTP Basic authentication (default).
+    #[default]
+    Basic,
+    /// Bearer token authentication.
+    Bearer,
+}
+
+/// Credentials for HTTP authentication.
 #[derive(Clone)]
 pub struct Credentials {
     pub username: String,
     pub password: String,
+    pub auth_type: AuthType,
 }
 
 impl std::fmt::Debug for Credentials {
@@ -77,8 +88,14 @@ impl GerritClient {
     fn auth_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         if let Some(ref creds) = self.credentials {
-            let encoded = base64_encode(&format!("{}:{}", creds.username, creds.password));
-            if let Ok(val) = HeaderValue::from_str(&format!("Basic {encoded}")) {
+            let header_value = match creds.auth_type {
+                AuthType::Bearer => format!("Bearer {}", creds.password),
+                AuthType::Basic => {
+                    let encoded = base64_encode(&format!("{}:{}", creds.username, creds.password));
+                    format!("Basic {encoded}")
+                }
+            };
+            if let Ok(val) = HeaderValue::from_str(&header_value) {
                 headers.insert(AUTHORIZATION, val);
             }
         }
@@ -485,5 +502,39 @@ mod tests {
         assert_eq!(base64_encode("a"), "YQ==");
         assert_eq!(base64_encode("ab"), "YWI=");
         assert_eq!(base64_encode("abc"), "YWJj");
+    }
+
+    #[test]
+    fn auth_headers_basic() {
+        let creds = Credentials {
+            username: "user".into(),
+            password: "pass".into(),
+            auth_type: AuthType::Basic,
+        };
+        let client =
+            GerritClient::new(Url::parse("https://example.com").unwrap(), Some(creds)).unwrap();
+        let headers = client.auth_headers();
+        let auth = headers.get(AUTHORIZATION).unwrap().to_str().unwrap();
+        assert!(auth.starts_with("Basic "), "expected Basic auth: {auth}");
+        assert_eq!(auth, "Basic dXNlcjpwYXNz");
+    }
+
+    #[test]
+    fn auth_headers_bearer() {
+        let creds = Credentials {
+            username: "user".into(),
+            password: "my-token-123".into(),
+            auth_type: AuthType::Bearer,
+        };
+        let client =
+            GerritClient::new(Url::parse("https://example.com").unwrap(), Some(creds)).unwrap();
+        let headers = client.auth_headers();
+        let auth = headers.get(AUTHORIZATION).unwrap().to_str().unwrap();
+        assert_eq!(auth, "Bearer my-token-123");
+    }
+
+    #[test]
+    fn auth_type_default_is_basic() {
+        assert_eq!(AuthType::default(), AuthType::Basic);
     }
 }

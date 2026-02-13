@@ -15,6 +15,7 @@ fn test_client_with_auth(server_url: &str) -> GerritClient {
     let creds = Credentials {
         username: "testuser".into(),
         password: "testpass".into(),
+        auth_type: grt::gerrit::AuthType::Basic,
     };
     GerritClient::new(url, Some(creds)).unwrap()
 }

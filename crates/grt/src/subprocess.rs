@@ -226,6 +226,34 @@ pub fn git_credential_reject(
     Ok(())
 }
 
+/// Checkout an existing branch.
+pub fn git_checkout(branch: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["checkout", branch], work_dir)
+}
+
+/// Delete a local branch.
+pub fn git_delete_branch(branch: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["branch", "-D", branch], work_dir)
+}
+
+/// Run `git remote update <remote>` to fetch latest refs.
+pub fn git_remote_update(remote: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["remote", "update", remote], work_dir)
+}
+
+/// Strip the Change-Id from HEAD and amend the commit.
+///
+/// The commit-msg hook will generate a new Change-Id on amend.
+pub fn git_regenerate_changeid(work_dir: &Path) -> Result<()> {
+    let msg = git_output(&["log", "-1", "--format=%B"], work_dir)?;
+    let new_msg: String = msg
+        .lines()
+        .filter(|line| !line.starts_with("Change-Id:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    git_exec(&["commit", "--amend", "-m", &new_msg], work_dir)
+}
+
 /// Fetch a ref from a remote and return the SHA it resolves to.
 pub fn git_fetch_ref_sha(remote: &str, git_ref: &str, work_dir: &Path) -> Result<String> {
     git_exec(&["fetch", remote, git_ref], work_dir)?;

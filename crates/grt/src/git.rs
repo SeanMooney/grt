@@ -61,6 +61,31 @@ impl GitRepo {
         Ok(git_dir.join("hooks"))
     }
 
+    /// Get the upstream tracking remote and branch for the current branch.
+    ///
+    /// Reads `branch.<name>.remote` and `branch.<name>.merge` from git config.
+    /// Returns `Some((remote, branch))` if both are configured, `None` otherwise.
+    pub fn upstream_branch(&self) -> Result<Option<(String, String)>> {
+        let branch = self.current_branch()?;
+        let remote_key = format!("branch.{branch}.remote");
+        let merge_key = format!("branch.{branch}.merge");
+
+        let remote = match self.config_value(&remote_key) {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let merge = match self.config_value(&merge_key) {
+            Some(m) => {
+                // Convert refs/heads/main -> main
+                m.strip_prefix("refs/heads/").unwrap_or(&m).to_string()
+            }
+            None => return Ok(None),
+        };
+
+        Ok(Some((remote, merge)))
+    }
+
     /// Check if the worktree has uncommitted changes (staged or unstaged).
     pub fn is_dirty(&self) -> Result<bool> {
         // Use git status subprocess for reliability — gix's status API
@@ -150,6 +175,35 @@ mod tests {
             root.canonicalize().unwrap(),
             dir.path().canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn upstream_branch_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        // Set up tracking
+        std::process::Command::new("git")
+            .args(["config", "branch.main.remote", "origin"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "branch.main.merge", "refs/heads/develop"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let repo = GitRepo::open(dir.path()).unwrap();
+        let result = repo.upstream_branch().unwrap();
+        assert_eq!(result, Some(("origin".into(), "develop".into())));
+    }
+
+    #[test]
+    fn upstream_branch_not_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let repo = GitRepo::open(dir.path()).unwrap();
+        let result = repo.upstream_branch().unwrap();
+        assert_eq!(result, None);
     }
 
     #[test]

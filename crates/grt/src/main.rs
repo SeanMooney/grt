@@ -344,12 +344,70 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         return review::cmd_review_list(&app, args.branch.as_deref(), args.list >= 2).await;
     }
 
+    // Resolve branch via --track if no explicit branch given
+    let branch = if args.track && args.branch.is_none() {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let app = App::new(work_dir, &cli_overrides)?;
+        match app.git.upstream_branch()? {
+            Some((_remote, merge_branch)) => {
+                tracing::debug!("--track resolved upstream branch to {}", merge_branch);
+                Some(merge_branch)
+            }
+            None => None,
+        }
+    } else {
+        args.branch.clone()
+    };
+
+    // Pre-push: --update runs `git remote update`
+    if args.update {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let app = App::new(work_dir, &cli_overrides)?;
+        let remote = args.remote.as_deref().unwrap_or(&app.config.remote);
+        let root = app.git.root()?;
+        tracing::info!("Updating remote {remote}...");
+        subprocess::git_remote_update(remote, &root)?;
+    }
+
+    // Pre-push: --new-changeid strips Change-Id and amends
+    if args.new_changeid {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let app = App::new(work_dir, &cli_overrides)?;
+        let root = app.git.root()?;
+        tracing::info!("Regenerating Change-Id...");
+        subprocess::git_regenerate_changeid(&root)?;
+    }
+
+    let current_branch_name = if args.finish {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let app = App::new(work_dir, &cli_overrides)?;
+        Some(app.git.current_branch()?)
+    } else {
+        None
+    };
+
     // Default mode: push
     cmd_push(
         work_dir,
         PushArgs {
-            branch: args.branch,
-            remote: args.remote,
+            branch,
+            remote: args.remote.clone(),
             topic: if args.no_topic { None } else { args.topic },
             wip: args.wip,
             ready: args.ready,
@@ -363,11 +421,32 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
             no_rebase: args.no_rebase,
             dry_run: args.dry_run,
             yes: args.yes,
-            new_changeid: args.new_changeid,
+            new_changeid: false, // already handled above
         },
         insecure,
     )
-    .await
+    .await?;
+
+    // Post-push: --finish checks out default branch and deletes topic branch
+    if let Some(topic_branch) = current_branch_name {
+        let cli_overrides = CliOverrides {
+            remote: args.remote,
+            insecure,
+            ..Default::default()
+        };
+        let app = App::new(work_dir, &cli_overrides)?;
+        let default_branch = app.config.branch.clone();
+        let root = app.git.root()?;
+        tracing::info!(
+            "Finishing: checking out {} and deleting {}...",
+            default_branch,
+            topic_branch
+        );
+        subprocess::git_checkout(&default_branch, &root)?;
+        subprocess::git_delete_branch(&topic_branch, &root)?;
+    }
+
+    Ok(())
 }
 
 async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()> {

@@ -73,9 +73,14 @@ impl App {
         // Try credentials.toml first
         if let Some(config_dir) = dirs::config_dir() {
             match config::load_credentials(&self.config.host, &config_dir) {
-                Ok(Some((username, password))) => {
+                Ok(Some(loaded)) => {
                     debug!("credentials loaded from credentials.toml");
-                    self.set_credentials(username, password, CredentialSource::File)?;
+                    self.set_credentials(
+                        loaded.username,
+                        loaded.password,
+                        loaded.auth_type,
+                        CredentialSource::File,
+                    )?;
                     return Ok(());
                 }
                 Ok(None) => {
@@ -87,12 +92,17 @@ impl App {
             }
         }
 
-        // Fall back to git credential helper
+        // Fall back to git credential helper (always Basic auth)
         let url = self.config.gerrit_base_url()?.to_string();
         let root = self.git.root()?;
         let (username, password) =
             subprocess::git_credential_fill(&url, &root).context("acquiring credentials")?;
-        self.set_credentials(username, password, CredentialSource::GitHelper)?;
+        self.set_credentials(
+            username,
+            password,
+            crate::gerrit::AuthType::Basic,
+            CredentialSource::GitHelper,
+        )?;
         Ok(())
     }
 
@@ -126,10 +136,14 @@ impl App {
         &mut self,
         username: String,
         password: String,
+        auth_type: crate::gerrit::AuthType,
         source: CredentialSource,
     ) -> Result<()> {
-        self.gerrit
-            .set_credentials(Credentials { username, password });
+        self.gerrit.set_credentials(Credentials {
+            username,
+            password,
+            auth_type,
+        });
         self.credential_source = Some(source);
         // Re-create client with auth prefix
         let base_url = self.config.gerrit_base_url()?;

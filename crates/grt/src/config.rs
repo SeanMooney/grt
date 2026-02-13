@@ -8,6 +8,8 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use url::Url;
 
+use crate::gerrit::AuthType;
+
 /// Configuration for connecting to a Gerrit instance.
 #[derive(Debug, Clone)]
 pub struct GerritConfig {
@@ -70,6 +72,8 @@ struct ServerCredential {
     name: String,
     username: String,
     password: String,
+    /// Authentication type: "basic" (default) or "bearer".
+    auth_type: Option<String>,
 }
 
 /// Top-level structure of `~/.config/grt/credentials.toml`.
@@ -78,11 +82,19 @@ struct CredentialsFile {
     server: Vec<ServerCredential>,
 }
 
+/// Loaded credential set from `credentials.toml`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedCredentials {
+    pub username: String,
+    pub password: String,
+    pub auth_type: AuthType,
+}
+
 /// Load credentials for `host` from `<config_dir>/grt/credentials.toml`.
 ///
 /// Returns `Ok(None)` if the file is missing or no entry matches `host`.
 /// Returns `Err` if the file has bad permissions (must be `0600` on Unix) or invalid TOML.
-pub fn load_credentials(host: &str, config_dir: &Path) -> Result<Option<(String, String)>> {
+pub fn load_credentials(host: &str, config_dir: &Path) -> Result<Option<LoadedCredentials>> {
     let cred_path = config_dir.join("grt").join("credentials.toml");
     if !cred_path.exists() {
         return Ok(None);
@@ -112,7 +124,15 @@ pub fn load_credentials(host: &str, config_dir: &Path) -> Result<Option<(String,
 
     for server in &creds.server {
         if server.name == host {
-            return Ok(Some((server.username.clone(), server.password.clone())));
+            let auth_type = match server.auth_type.as_deref() {
+                Some("bearer") => AuthType::Bearer,
+                _ => AuthType::Basic,
+            };
+            return Ok(Some(LoadedCredentials {
+                username: server.username.clone(),
+                password: server.password.clone(),
+                auth_type,
+            }));
         }
     }
 
@@ -455,11 +475,10 @@ password = "secret-token"
         );
 
         let result = load_credentials("review.opendev.org", dir.path()).unwrap();
-        assert_eq!(
-            result,
-            Some(("alice".into(), "secret-token".into())),
-            "should return matching credentials"
-        );
+        let loaded = result.expect("should return matching credentials");
+        assert_eq!(loaded.username, "alice");
+        assert_eq!(loaded.password, "secret-token");
+        assert_eq!(loaded.auth_type, AuthType::Basic);
     }
 
     #[test]
@@ -533,12 +552,54 @@ password = "token-2"
 "#,
         );
 
-        let result = load_credentials("review.other.org", dir.path()).unwrap();
-        assert_eq!(
-            result,
-            Some(("bob".into(), "token-2".into())),
-            "should match second server entry"
+        let loaded = load_credentials("review.other.org", dir.path())
+            .unwrap()
+            .expect("should match second server entry");
+        assert_eq!(loaded.username, "bob");
+        assert_eq!(loaded.password, "token-2");
+        assert_eq!(loaded.auth_type, AuthType::Basic);
+    }
+
+    #[test]
+    fn load_credentials_bearer_auth_type() {
+        let dir = tempfile::tempdir().unwrap();
+        write_credentials_file(
+            dir.path(),
+            r#"
+[[server]]
+name = "review.example.com"
+username = "bot"
+password = "bearer-token-abc"
+auth_type = "bearer"
+"#,
         );
+
+        let loaded = load_credentials("review.example.com", dir.path())
+            .unwrap()
+            .expect("should return matching credentials");
+        assert_eq!(loaded.username, "bot");
+        assert_eq!(loaded.password, "bearer-token-abc");
+        assert_eq!(loaded.auth_type, AuthType::Bearer);
+    }
+
+    #[test]
+    fn load_credentials_explicit_basic_auth_type() {
+        let dir = tempfile::tempdir().unwrap();
+        write_credentials_file(
+            dir.path(),
+            r#"
+[[server]]
+name = "review.example.com"
+username = "alice"
+password = "pass"
+auth_type = "basic"
+"#,
+        );
+
+        let loaded = load_credentials("review.example.com", dir.path())
+            .unwrap()
+            .expect("should return matching credentials");
+        assert_eq!(loaded.auth_type, AuthType::Basic);
     }
 
     #[test]
