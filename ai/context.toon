@@ -1,0 +1,31 @@
+project: grt
+status: Design phase — repo structure bootstrapped, ready for implementation
+
+description: Rust CLI/TUI tool for managing Git and Gerrit workflows. Combines gertty (UI + sync + search), git-review (push workflow), and ca-bhfuil (async patterns) into one tool. Not a 1:1 port — takes the best ideas from each and redesigns for Rust idioms.
+
+tech_stack[10]{layer,crate,role}:
+  Runtime,tokio,Async task scheduling channels timers
+  Concurrency,tokio-scoped,Scoped tasks that borrow from parent
+  CLI,clap (derive),Subcommands type-safe args
+  TUI,ratatui + crossterm,Terminal UI cross-platform input
+  Database,sqlx + SQLite,Async embedded SQL compile-time checking
+  Git,git2,libgit2 bindings NoteDb access
+  HTTP,reqwest,Gerrit REST API client
+  Search,nucleo-matcher,fzf-quality fuzzy matching
+  Logging,tracing,Structured logging with spans
+  Errors,anyhow,Ergonomic error propagation
+
+tech_stack_detail: See docs/design/draft/tech-stack.md for full crate rationale
+
+repo_layout: See docs/design/adopted/repo-layout.md
+
+conventions: See docs/design/adopted/rust-conventions.md
+
+patterns: See docs/design/adopted/patterns.md
+
+reference_projects[3]{name,path,role}:
+  gertty,ref/gertty/,Primary for data model sync search UI
+  git-review,ref/git-review/,Primary for push workflow Gerrit API
+  ca-bhfuil,ref/ca-bhfuil/,Primary for async patterns CLI architecture
+
+current_phase: Repo structure bootstrapped with Cargo workspace and build infrastructure — ready to populate design docs and begin implementation

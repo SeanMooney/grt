@@ -1,0 +1,29 @@
+phase: Repo bootstrap and design reorganization
+
+completed[8]{task,detail}:
+  Directory structure,Created docs/design/draft/ and docs/design/adopted/
+  Design doc moves,Moved 12 design docs to docs/design/draft/ via git mv
+  Link fixes,Updated ref-specs/ links to ../ref-specs/ in all moved docs
+  Deduplication,Replaced tree diagrams in architecture.md build-and-release.md tech-stack.md with cross-refs to repo-layout.md
+  repo-layout.md,Created docs/design/adopted/repo-layout.md as single source of truth for directory structure
+  Design README,Updated docs/design/README.md with draft/adopted lifecycle and new paths
+  TOON conversion,Converted ai/context.md and ai/session.md to .toon format
+  File moves,Moved rust-conventions.md and patterns.md from ai/ to docs/design/adopted/
+
+in_progress: Nothing
+
+next_steps[4]:
+  Populate design doc stubs using completed ref-specs (see traceability matrix in docs/design/README.md)
+  Create ADRs for key design decisions as they emerge
+  Begin implementation starting with data model and Gerrit client
+  Enhance flake.nix with static musl build and cargo-deny check in nix checks
+
+decisions_pending[0]:
+
+handoff_notes[6]:
+  ref/ directory contains Python source code for all three reference projects
+  ref/ca-bhfuil/ has its own CLAUDE.md and extensive docs
+  ref/gertty/ is the most complex reference — start with its data model
+  All 7 ref-specs are complete and ready as input for design docs
+  Cargo workspace builds and passes all checks (cargo build test clippy fmt deny)
+  Build infrastructure in place: justfile flake.nix deny.toml rust-toolchain.toml nextest.toml
