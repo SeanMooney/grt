@@ -617,6 +617,7 @@ mod tests {
             change_id: None,
             subject: Some("Test".into()),
             status: Some("NEW".into()),
+            topic: None,
             created: None,
             updated: None,
             number: Some(number),

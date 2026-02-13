@@ -140,6 +140,16 @@ impl GerritClient {
         serde_json::from_str(&body).context("parsing change detail")
     }
 
+    /// Get change detail with ALL_REVISIONS (needed for download/cherry-pick).
+    pub async fn get_change_all_revisions(&self, change_id: &str) -> Result<ChangeInfo> {
+        let path = format!(
+            "/changes/{}/detail?o=ALL_REVISIONS&o=DETAILED_ACCOUNTS",
+            urlencoding::encode(change_id)
+        );
+        let body = self.get(&path).await?;
+        serde_json::from_str(&body).context("parsing change detail with all revisions")
+    }
+
     /// Get all comments on a change (all revisions).
     pub async fn get_change_comments(
         &self,
@@ -287,6 +297,7 @@ pub struct ChangeInfo {
     pub change_id: Option<String>,
     pub subject: Option<String>,
     pub status: Option<String>,
+    pub topic: Option<String>,
     pub created: Option<String>,
     pub updated: Option<String>,
     #[serde(rename = "_number")]

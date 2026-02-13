@@ -13,7 +13,7 @@ use grt::config::CliOverrides;
 use grt::export::{self, ExportArgs};
 use grt::hook;
 use grt::push::{self, PushOptions};
-use grt::review::ReviewArgs;
+use grt::review::{self, ReviewArgs};
 use grt::subprocess;
 
 /// grt — CLI/TUI tool for Git and Gerrit workflows
@@ -284,19 +284,47 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         .await;
     }
 
-    // Modes not yet implemented (Batch 2+)
-    if args.download.is_some() {
-        anyhow::bail!("download mode (-d) is not yet implemented");
+    // Download mode
+    if let Some(ref change_arg) = args.download {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let mut app = App::new(work_dir, &cli_overrides)?;
+        return review::cmd_review_download(&mut app, change_arg).await;
     }
-    if args.cherrypick.is_some() {
-        anyhow::bail!("cherrypick mode (-x) is not yet implemented");
+
+    // Cherry-pick modes
+    if let Some(ref change_arg) = args.cherrypick {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let mut app = App::new(work_dir, &cli_overrides)?;
+        return review::cmd_review_cherrypick(&mut app, change_arg).await;
     }
-    if args.cherrypickindicate.is_some() {
-        anyhow::bail!("cherrypickindicate mode (-X) is not yet implemented");
+    if let Some(ref change_arg) = args.cherrypickindicate {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let mut app = App::new(work_dir, &cli_overrides)?;
+        return review::cmd_review_cherrypickindicate(&mut app, change_arg).await;
     }
-    if args.cherrypickonly.is_some() {
-        anyhow::bail!("cherrypickonly mode (-N) is not yet implemented");
+    if let Some(ref change_arg) = args.cherrypickonly {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let mut app = App::new(work_dir, &cli_overrides)?;
+        return review::cmd_review_cherrypickonly(&mut app, change_arg).await;
     }
+
+    // Modes not yet implemented (Batch 3+)
     if args.compare.is_some() {
         anyhow::bail!("compare mode (-m) is not yet implemented");
     }

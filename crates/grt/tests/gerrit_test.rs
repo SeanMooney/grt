@@ -141,6 +141,61 @@ async fn query_changes_empty() {
 }
 
 #[tokio::test]
+async fn get_change_all_revisions_success() {
+    let mut server = mockito::Server::new_async().await;
+    let body = r#")]}'
+{
+  "id": "proj~main~Iabcdef",
+  "project": "proj",
+  "branch": "main",
+  "change_id": "Iabcdef",
+  "subject": "Fix bug",
+  "status": "NEW",
+  "topic": "my-feature",
+  "_number": 12345,
+  "owner": { "_account_id": 1000096, "name": "Alice", "username": "alice" },
+  "current_revision": "def456",
+  "revisions": {
+    "abc123": {
+      "_number": 1,
+      "ref": "refs/changes/45/12345/1",
+      "commit": { "subject": "Fix bug v1" }
+    },
+    "def456": {
+      "_number": 2,
+      "ref": "refs/changes/45/12345/2",
+      "commit": { "subject": "Fix bug v2" }
+    }
+  }
+}"#;
+    let mock = server
+        .mock(
+            "GET",
+            mockito::Matcher::Regex(r"/changes/12345/detail\?o=ALL_REVISIONS.*".to_string()),
+        )
+        .with_status(200)
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let client = test_client(&server.url());
+    let change = client.get_change_all_revisions("12345").await.unwrap();
+    assert_eq!(change.number, Some(12345));
+    assert_eq!(change.topic.as_deref(), Some("my-feature"));
+    let revisions = change.revisions.unwrap();
+    assert_eq!(revisions.len(), 2);
+    assert!(revisions.contains_key("abc123"));
+    assert!(revisions.contains_key("def456"));
+    assert_eq!(revisions["abc123"].number, Some(1));
+    assert_eq!(revisions["def456"].number, Some(2));
+    assert_eq!(
+        revisions["abc123"].git_ref.as_deref(),
+        Some("refs/changes/45/12345/1")
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn get_change_comments_success() {
     let mut server = mockito::Server::new_async().await;
     let body = r#")]}'

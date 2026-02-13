@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright (c) 2026 grt contributors
 
+use anyhow::{Context, Result};
 use clap::Args;
+use tracing::debug;
+
+use crate::app::App;
+use crate::gerrit::{ChangeInfo, RevisionInfo};
+use crate::subprocess;
 
 /// ReviewArgs mirrors git-review's exact flag set.
 ///
@@ -212,9 +218,178 @@ fn is_numeric(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
 }
 
+/// Parse a "CHANGE[,PS]" string into (change_id, optional_patchset).
+///
+/// - `"12345"` -> `("12345", None)`
+/// - `"12345,2"` -> `("12345", Some(2))`
+/// - `"12345,abc"` -> `("12345,abc", None)` (invalid patchset, treat as plain ID)
+pub fn parse_change_patchset(input: &str) -> (String, Option<i32>) {
+    if let Some((change, ps_str)) = input.split_once(',') {
+        if let Ok(ps) = ps_str.parse::<i32>() {
+            return (change.to_string(), Some(ps));
+        }
+    }
+    (input.to_string(), None)
+}
+
+/// Find the target revision from a change's revision map.
+///
+/// If `patchset` is `Some(n)`, finds the revision with that patchset number.
+/// If `patchset` is `None`, uses the change's `current_revision`.
+pub fn find_target_revision(
+    change: &ChangeInfo,
+    patchset: Option<i32>,
+) -> Result<(&str, &RevisionInfo)> {
+    let revisions = change
+        .revisions
+        .as_ref()
+        .context("change has no revision data")?;
+
+    match patchset {
+        Some(ps) => {
+            for (sha, rev) in revisions {
+                if rev.number == Some(ps) {
+                    return Ok((sha, rev));
+                }
+            }
+            anyhow::bail!("patchset {} not found in change", ps)
+        }
+        None => {
+            let current = change
+                .current_revision
+                .as_deref()
+                .context("change has no current revision")?;
+            let rev = revisions
+                .get(current)
+                .context("current revision not found in revision map")?;
+            Ok((current, rev))
+        }
+    }
+}
+
+/// Determine the local branch name for a downloaded change.
+///
+/// Uses `review/<owner>/<topic>` when both are available,
+/// otherwise falls back to `review/<change_number>/<patchset>`.
+pub fn download_branch_name(change: &ChangeInfo, patchset: i32) -> String {
+    if let Some(ref topic) = change.topic {
+        if let Some(ref owner) = change.owner {
+            if let Some(ref username) = owner.username {
+                return format!("review/{username}/{topic}");
+            }
+            if let Some(ref name) = owner.name {
+                let sanitized = name.replace(' ', "_");
+                return format!("review/{sanitized}/{topic}");
+            }
+        }
+    }
+
+    let change_num = change.number.unwrap_or(0);
+    format!("review/{change_num}/{patchset}")
+}
+
+/// Download a change from Gerrit: fetch the ref and create a local branch.
+pub async fn cmd_review_download(app: &mut App, change_arg: &str) -> Result<()> {
+    let normalized = normalize_change_arg(change_arg);
+    let (change_id, patchset) = parse_change_patchset(&normalized);
+
+    app.authenticate_and_verify().await?;
+
+    debug!("fetching change {} (patchset: {:?})", change_id, patchset);
+    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    let (_, revision) = find_target_revision(&change, patchset)?;
+    let ps_num = revision.number.context("revision has no patchset number")?;
+    let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
+
+    let remote = app.config.remote.clone();
+    let root = app.git.root()?;
+    let branch = download_branch_name(&change, ps_num);
+
+    eprintln!(
+        "Downloading {} patchset {} into {branch}...",
+        change_id, ps_num
+    );
+    subprocess::git_fetch_ref(&remote, git_ref, &root)?;
+    subprocess::git_checkout_new_branch(&branch, "FETCH_HEAD", &root)?;
+    eprintln!("Switched to new branch '{branch}'");
+
+    Ok(())
+}
+
+/// Cherry-pick a change onto the current branch.
+pub async fn cmd_review_cherrypick(app: &mut App, change_arg: &str) -> Result<()> {
+    let normalized = normalize_change_arg(change_arg);
+    let (change_id, patchset) = parse_change_patchset(&normalized);
+
+    app.authenticate_and_verify().await?;
+
+    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    let (_, revision) = find_target_revision(&change, patchset)?;
+    let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
+
+    let remote = app.config.remote.clone();
+    let root = app.git.root()?;
+
+    eprintln!("Cherry-picking change {}...", change_id);
+    subprocess::git_fetch_ref(&remote, git_ref, &root)?;
+    subprocess::git_cherry_pick("FETCH_HEAD", &root)?;
+    eprintln!("Cherry-pick applied.");
+
+    Ok(())
+}
+
+/// Cherry-pick with "(cherry picked from commit ...)" indication.
+pub async fn cmd_review_cherrypickindicate(app: &mut App, change_arg: &str) -> Result<()> {
+    let normalized = normalize_change_arg(change_arg);
+    let (change_id, patchset) = parse_change_patchset(&normalized);
+
+    app.authenticate_and_verify().await?;
+
+    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    let (_, revision) = find_target_revision(&change, patchset)?;
+    let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
+
+    let remote = app.config.remote.clone();
+    let root = app.git.root()?;
+
+    eprintln!("Cherry-picking change {} (with indication)...", change_id);
+    subprocess::git_fetch_ref(&remote, git_ref, &root)?;
+    subprocess::git_cherry_pick_indicate("FETCH_HEAD", &root)?;
+    eprintln!("Cherry-pick applied with cherry-picked-from indication.");
+
+    Ok(())
+}
+
+/// Cherry-pick without committing (apply to working directory only).
+pub async fn cmd_review_cherrypickonly(app: &mut App, change_arg: &str) -> Result<()> {
+    let normalized = normalize_change_arg(change_arg);
+    let (change_id, patchset) = parse_change_patchset(&normalized);
+
+    app.authenticate_and_verify().await?;
+
+    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    let (_, revision) = find_target_revision(&change, patchset)?;
+    let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
+
+    let remote = app.config.remote.clone();
+    let root = app.git.root()?;
+
+    eprintln!(
+        "Applying change {} to working directory (no commit)...",
+        change_id
+    );
+    subprocess::git_fetch_ref(&remote, git_ref, &root)?;
+    subprocess::git_cherry_pick_no_commit("FETCH_HEAD", &root)?;
+    eprintln!("Change applied to working directory.");
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+
     use clap::Parser;
 
     // Wrapper to parse ReviewArgs from a flat command line, simulating `git-review ...`
@@ -767,5 +942,153 @@ mod tests {
     #[test]
     fn normalize_passthrough_change_with_patchset() {
         assert_eq!(normalize_change_arg("12345,2"), "12345,2");
+    }
+
+    // === parse_change_patchset ===
+
+    #[test]
+    fn parse_change_patchset_number_only() {
+        let (change, ps) = parse_change_patchset("12345");
+        assert_eq!(change, "12345");
+        assert_eq!(ps, None);
+    }
+
+    #[test]
+    fn parse_change_patchset_with_ps() {
+        let (change, ps) = parse_change_patchset("12345,2");
+        assert_eq!(change, "12345");
+        assert_eq!(ps, Some(2));
+    }
+
+    #[test]
+    fn parse_change_patchset_invalid_ps() {
+        let (change, ps) = parse_change_patchset("12345,abc");
+        assert_eq!(change, "12345,abc");
+        assert_eq!(ps, None);
+    }
+
+    #[test]
+    fn parse_change_patchset_change_id_string() {
+        let (change, ps) = parse_change_patchset("Iabcdef1234");
+        assert_eq!(change, "Iabcdef1234");
+        assert_eq!(ps, None);
+    }
+
+    // === find_target_revision ===
+
+    fn make_test_change() -> ChangeInfo {
+        let mut revisions = HashMap::new();
+        revisions.insert(
+            "abc123".to_string(),
+            RevisionInfo {
+                number: Some(1),
+                git_ref: Some("refs/changes/45/12345/1".to_string()),
+                commit: None,
+            },
+        );
+        revisions.insert(
+            "def456".to_string(),
+            RevisionInfo {
+                number: Some(2),
+                git_ref: Some("refs/changes/45/12345/2".to_string()),
+                commit: None,
+            },
+        );
+
+        ChangeInfo {
+            id: None,
+            project: Some("proj".to_string()),
+            branch: Some("main".to_string()),
+            change_id: Some("Iabcdef".to_string()),
+            subject: Some("Fix bug".to_string()),
+            status: Some("NEW".to_string()),
+            topic: Some("my-feature".to_string()),
+            created: None,
+            updated: None,
+            number: Some(12345),
+            owner: Some(crate::gerrit::AccountInfo {
+                account_id: 1000096,
+                name: Some("Alice".to_string()),
+                email: None,
+                username: Some("alice".to_string()),
+                display_name: None,
+            }),
+            current_revision: Some("def456".to_string()),
+            revisions: Some(revisions),
+            messages: None,
+            insertions: None,
+            deletions: None,
+        }
+    }
+
+    #[test]
+    fn find_revision_by_patchset() {
+        let change = make_test_change();
+        let (sha, rev) = find_target_revision(&change, Some(1)).unwrap();
+        assert_eq!(sha, "abc123");
+        assert_eq!(rev.number, Some(1));
+        assert_eq!(rev.git_ref.as_deref(), Some("refs/changes/45/12345/1"));
+    }
+
+    #[test]
+    fn find_revision_current() {
+        let change = make_test_change();
+        let (sha, rev) = find_target_revision(&change, None).unwrap();
+        assert_eq!(sha, "def456");
+        assert_eq!(rev.number, Some(2));
+    }
+
+    #[test]
+    fn find_revision_missing_patchset() {
+        let change = make_test_change();
+        let result = find_target_revision(&change, Some(99));
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("patchset 99"),
+            "error should mention missing patchset"
+        );
+    }
+
+    #[test]
+    fn find_revision_no_revisions() {
+        let mut change = make_test_change();
+        change.revisions = None;
+        let result = find_target_revision(&change, None);
+        assert!(result.is_err());
+    }
+
+    // === download_branch_name ===
+
+    #[test]
+    fn download_branch_with_topic_and_owner() {
+        let change = make_test_change();
+        assert_eq!(download_branch_name(&change, 2), "review/alice/my-feature");
+    }
+
+    #[test]
+    fn download_branch_no_topic() {
+        let mut change = make_test_change();
+        change.topic = None;
+        assert_eq!(download_branch_name(&change, 2), "review/12345/2");
+    }
+
+    #[test]
+    fn download_branch_no_owner() {
+        let mut change = make_test_change();
+        change.owner = None;
+        assert_eq!(download_branch_name(&change, 1), "review/12345/1");
+    }
+
+    #[test]
+    fn download_branch_owner_name_only() {
+        let mut change = make_test_change();
+        if let Some(ref mut owner) = change.owner {
+            owner.username = None;
+            owner.name = Some("Alice Smith".to_string());
+        }
+        assert_eq!(
+            download_branch_name(&change, 2),
+            "review/Alice_Smith/my-feature"
+        );
     }
 }

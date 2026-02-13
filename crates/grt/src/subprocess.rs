@@ -75,6 +75,31 @@ pub fn count_unpushed_commits(remote: &str, branch: &str, work_dir: &Path) -> Re
     }
 }
 
+/// Fetch a specific ref from a remote.
+pub fn git_fetch_ref(remote: &str, git_ref: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["fetch", remote, git_ref], work_dir)
+}
+
+/// Create and checkout a new branch at the given start point.
+pub fn git_checkout_new_branch(branch: &str, start_point: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["checkout", "-b", branch, start_point], work_dir)
+}
+
+/// Cherry-pick a commit onto the current branch.
+pub fn git_cherry_pick(commit: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["cherry-pick", commit], work_dir)
+}
+
+/// Cherry-pick with "(cherry picked from commit ...)" indication.
+pub fn git_cherry_pick_indicate(commit: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["cherry-pick", "-x", commit], work_dir)
+}
+
+/// Cherry-pick without committing (apply to working directory only).
+pub fn git_cherry_pick_no_commit(commit: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["cherry-pick", "--no-commit", commit], work_dir)
+}
+
 /// Fill credentials from git credential helper.
 pub fn git_credential_fill(url: &str, work_dir: &Path) -> Result<(String, String)> {
     use std::process::Stdio;
