@@ -1,0 +1,53 @@
+)]}'
+{
+  "id": "myproject~main~I1234567890abcdef1234567890abcdef12345678",
+  "project": "myproject",
+  "branch": "main",
+  "change_id": "I1234567890abcdef1234567890abcdef12345678",
+  "subject": "Fix authentication race condition",
+  "status": "NEW",
+  "created": "2025-02-01 10:00:00.000000000",
+  "updated": "2025-02-10 16:00:00.000000000",
+  "insertions": 42,
+  "deletions": 10,
+  "_number": 12345,
+  "owner": {
+    "_account_id": 1000096,
+    "name": "Alice Smith",
+    "email": "alice@example.com"
+  },
+  "current_revision": "abc123def456",
+  "revisions": {
+    "abc123def456": {
+      "_number": 3,
+      "ref": "refs/changes/45/12345/3",
+      "commit": {
+        "subject": "Fix authentication race condition",
+        "message": "Fix authentication race condition\n\nThis fixes a race condition in the auth handler.\n\nChange-Id: I1234567890abcdef1234567890abcdef12345678\n",
+        "author": {
+          "name": "Alice Smith",
+          "email": "alice@example.com",
+          "date": "2025-02-10 14:00:00.000000000"
+        },
+        "committer": {
+          "name": "Alice Smith",
+          "email": "alice@example.com",
+          "date": "2025-02-10 14:00:00.000000000"
+        }
+      }
+    }
+  },
+  "messages": [
+    {
+      "id": "msg001",
+      "author": {
+        "_account_id": 1000097,
+        "name": "Bob Johnson",
+        "email": "bob@example.com"
+      },
+      "date": "2025-02-10 14:30:00.000000000",
+      "message": "Patch Set 3: Code-Review-1\n\nSome general concerns about the approach. See inline comments.",
+      "_revision_number": 3
+    }
+  ]
+}

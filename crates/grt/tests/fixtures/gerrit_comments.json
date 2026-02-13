@@ -1,0 +1,50 @@
+)]}'
+{
+  "src/auth/handler.rs": [
+    {
+      "id": "comment001",
+      "path": "src/auth/handler.rs",
+      "line": 42,
+      "author": {
+        "_account_id": 1000097,
+        "name": "Bob Johnson",
+        "email": "bob@example.com"
+      },
+      "message": "This mutex acquisition could deadlock if the token refresh\nhappens concurrently. Consider using a RwLock instead.",
+      "updated": "2025-02-10 14:32:00.000000000",
+      "patch_set": 3,
+      "unresolved": true
+    },
+    {
+      "id": "comment002",
+      "path": "src/auth/handler.rs",
+      "line": 42,
+      "in_reply_to": "comment001",
+      "author": {
+        "_account_id": 1000096,
+        "name": "Alice Smith",
+        "email": "alice@example.com"
+      },
+      "message": "Good catch. I'll switch to RwLock in the next patchset.",
+      "updated": "2025-02-10 16:00:00.000000000",
+      "patch_set": 3,
+      "unresolved": true
+    }
+  ],
+  "src/auth/token.rs": [
+    {
+      "id": "comment003",
+      "path": "src/auth/token.rs",
+      "line": 15,
+      "author": {
+        "_account_id": 1000097,
+        "name": "Bob Johnson",
+        "email": "bob@example.com"
+      },
+      "message": "This should be behind a feature flag.",
+      "updated": "2025-02-10 14:35:00.000000000",
+      "patch_set": 3,
+      "unresolved": false
+    }
+  ]
+}

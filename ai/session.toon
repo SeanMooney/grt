@@ -1,33 +1,35 @@
-phase: Tech stack adoption and design doc revision
+phase: MVP implementation complete
 
-completed[11]{task,detail}:
-  Directory structure,Created docs/design/draft/ and docs/design/adopted/
-  Design doc moves,Moved 12 design docs to docs/design/draft/ via git mv
-  Link fixes,Updated ref-specs/ links to ../ref-specs/ in all moved docs
-  Deduplication,Replaced tree diagrams in architecture.md build-and-release.md tech-stack.md with cross-refs to repo-layout.md
-  repo-layout.md,Created docs/design/adopted/repo-layout.md as single source of truth for directory structure
-  Design README,Updated docs/design/README.md with draft/adopted lifecycle and new paths
-  TOON conversion,Converted ai/context.md and ai/session.md to .toon format
-  File moves,Moved rust-conventions.md and patterns.md from ai/ to docs/design/adopted/
-  tech-stack adoption,Moved tech-stack.md v0.2 to docs/design/adopted/ and deleted v0.1 from draft/
-  architecture revision,Fixed git2→gix rusqlite→sqlx references removed duplicated error diagram added config.rs module section
-  ref-spec updates,Updated grt divergence sections in 5 ref-specs to reflect gix and sqlx decisions
+completed[7]{task,detail}:
+  Phase 0: Infrastructure,Added workspace deps envrc gitignore; upgraded Rust 1.82->1.85 for edition2024 transitive deps
+  Phase 1: Config + Git Repo,config.rs (.gitreview INI parser layered config) git.rs (gix wrapper for repo discovery HEAD config hooks)
+  Phase 2: Gerrit REST Client,gerrit.rs (reqwest client XSSI stripping serde types all endpoints) with mockito integration tests
+  Phase 3: Push Workflow,push.rs (refspec builder Change-Id extraction) hook.rs (vendored commit-msg) subprocess.rs (git helpers credential flow)
+  Phase 4: Comment Retrieval,comments.rs (thread resolution algorithm LLM-optimized text output structured JSON output)
+  Phase 5: CLI Wiring,main.rs (clap derive command tree) app.rs (App struct wiring config+git+gerrit)
+  Phase 6: End-to-End & Polish,Fixed clippy warnings cargo-deny issues (MPL-2.0 Zlib CDLA-Permissive-2.0 licenses gix 0.70->0.79 security advisory work_dir deprecation)
 
 in_progress: Nothing
 
 next_steps[4]:
+  Manual testing against a real Gerrit instance (setup push comments version)
   Populate design doc stubs using completed ref-specs (see traceability matrix in docs/design/README.md)
   Create ADRs for key design decisions as they emerge
-  Begin implementation starting with data model and Gerrit client
-  Enhance flake.nix with static musl build and cargo-deny check in nix checks
+  Begin TUI and SQLite work (post-MVP)
 
 decisions_pending[0]:
 
-handoff_notes[7]:
-  ref/ directory contains Python source code for all three reference projects
-  ref/ca-bhfuil/ has its own CLAUDE.md and extensive docs
-  ref/gertty/ is the most complex reference — start with its data model
-  All 7 ref-specs are complete and ready as input for design docs
-  Cargo workspace builds and passes all checks (cargo build test clippy fmt deny)
-  Build infrastructure in place: justfile flake.nix deny.toml rust-toolchain.toml nextest.toml
-  tech-stack.md is now adopted — all docs updated to reference adopted path and use gix/sqlx terminology
+test_status: 75 tests passing (58 lib + 9 main + 8 integration)
+lint_status: cargo fmt clippy deny all pass clean
+
+handoff_notes[10]:
+  MVP CLI is fully implemented: push comments setup version commands
+  75 tests all passing (58 lib unit + 9 main unit + 8 mockito integration)
+  cargo fmt --check passes
+  cargo clippy --workspace --all-targets -- -D warnings passes clean
+  cargo deny check passes (advisories ok bans ok licenses ok sources ok)
+  gix upgraded from 0.70 to 0.79 (fixed GHSA-2frx-2596-x5r6 SHA-1 advisory)
+  deny.toml licenses: added MPL-2.0 (option-ext/dirs) Zlib (foldhash/hashbrown) CDLA-Permissive-2.0 (webpki-roots)
+  Rust toolchain 1.85.0 (upgraded from 1.82.0 for edition2024 transitive deps)
+  All cargo commands must run via nix develop shell (not rustup)
+  Source tree: lib.rs app.rs config.rs gerrit.rs git.rs push.rs comments.rs hook.rs subprocess.rs + resources/commit-msg

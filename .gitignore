@@ -2,6 +2,7 @@ ref/
 target/
 result
 result-*
+.direnv/
 
 # Editor files
 *.swp
