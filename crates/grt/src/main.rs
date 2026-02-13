@@ -13,7 +13,7 @@ use grt::config::CliOverrides;
 use grt::export::{self, ExportArgs};
 use grt::gerrit::GerritError;
 use grt::hook;
-use grt::push::{self, PushOptions};
+use grt::push::{self, ChangeIdStatus, PushOptions};
 use grt::review::{self, ReviewArgs};
 use grt::subprocess;
 
@@ -89,6 +89,10 @@ struct GitReviewCli {
     #[arg(long)]
     no_color: bool,
 
+    /// Show license information
+    #[arg(long)]
+    license: bool,
+
     #[command(flatten)]
     review: ReviewArgs,
 }
@@ -157,6 +161,10 @@ struct PushArgs {
     /// Generate a new Change-Id (amend HEAD)
     #[arg(long)]
     new_changeid: bool,
+
+    /// Disable thin pack for push
+    #[arg(long)]
+    no_thin: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -285,6 +293,17 @@ async fn main() {
             let cli = GitReviewCli::parse();
             init_tracing(cli.verbose);
 
+            if cli.color.is_some() {
+                tracing::warn!("--color is not yet implemented");
+            }
+            if cli.no_color {
+                tracing::warn!("--no-color is not yet implemented");
+            }
+            if cli.license {
+                println!("Licensed under Apache-2.0 OR MIT");
+                return;
+            }
+
             let work_dir = std::env::current_dir().expect("cannot determine current directory");
             cmd_review(&work_dir, cli.review, false).await
         }
@@ -320,18 +339,41 @@ async fn main() {
 
 /// Dispatch `grt review` / `git-review` based on which mode flag is set.
 async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result<()> {
-    // Setup mode
+    // Setup mode: run setup, but continue if --finish is also set
     if args.setup {
-        return cmd_setup(
+        cmd_setup(
             work_dir,
             SetupArgs {
-                remote: args.remote,
+                remote: args.remote.clone(),
                 force_hook: false,
             },
             insecure,
         )
-        .await;
+        .await?;
+        if !args.finish {
+            return Ok(());
+        }
+        // Fall through to finish logic below
     }
+
+    // Resolve branch via --track if no explicit branch given (before all mode dispatches)
+    let branch = if args.track && args.branch.is_none() {
+        let cli_overrides = CliOverrides {
+            remote: args.remote.clone(),
+            insecure,
+            ..Default::default()
+        };
+        let app = App::new(work_dir, &cli_overrides)?;
+        match app.git.upstream_branch()? {
+            Some((_remote, merge_branch)) => {
+                tracing::debug!("--track resolved upstream branch to {}", merge_branch);
+                Some(merge_branch)
+            }
+            None => None,
+        }
+    } else {
+        args.branch.clone()
+    };
 
     // Download mode
     if let Some(ref change_arg) = args.download {
@@ -373,7 +415,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         return review::cmd_review_cherrypickonly(&mut app, change_arg).await;
     }
 
-    // Modes not yet implemented (Batch 3+)
+    // Compare mode
     if let Some(ref compare_arg) = args.compare {
         let cli_overrides = CliOverrides {
             remote: args.remote.clone(),
@@ -383,6 +425,8 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         let mut app = App::new(work_dir, &cli_overrides)?;
         return review::cmd_review_compare(&mut app, compare_arg).await;
     }
+
+    // List mode
     if args.list > 0 {
         let cli_overrides = CliOverrides {
             remote: args.remote.clone(),
@@ -390,27 +434,8 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
             ..Default::default()
         };
         let app = App::new(work_dir, &cli_overrides)?;
-        return review::cmd_review_list(&app, args.branch.as_deref(), args.list >= 2).await;
+        return review::cmd_review_list(&app, branch.as_deref(), args.list >= 2).await;
     }
-
-    // Resolve branch via --track if no explicit branch given
-    let branch = if args.track && args.branch.is_none() {
-        let cli_overrides = CliOverrides {
-            remote: args.remote.clone(),
-            insecure,
-            ..Default::default()
-        };
-        let app = App::new(work_dir, &cli_overrides)?;
-        match app.git.upstream_branch()? {
-            Some((_remote, merge_branch)) => {
-                tracing::debug!("--track resolved upstream branch to {}", merge_branch);
-                Some(merge_branch)
-            }
-            None => None,
-        }
-    } else {
-        args.branch.clone()
-    };
 
     // Pre-push: --update runs `git remote update`
     if args.update {
@@ -439,7 +464,13 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         subprocess::git_regenerate_changeid(&root)?;
     }
 
-    let current_branch_name = if args.finish {
+    // Pre-push: --force-rebase warning (Task H2)
+    if args.force_rebase {
+        tracing::warn!("--force-rebase: pre-push rebase not yet implemented");
+    }
+
+    // Capture current branch name for --finish (only when not dry-run) (Task B2)
+    let current_branch_name = if args.finish && !args.dry_run {
         let cli_overrides = CliOverrides {
             remote: args.remote.clone(),
             insecure,
@@ -451,13 +482,30 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
         None
     };
 
+    // Default topic to current branch name (Task H3)
+    let topic = if args.no_topic {
+        None
+    } else {
+        args.topic.clone().or_else(|| {
+            // Default to current branch name
+            let cli_overrides = CliOverrides {
+                remote: args.remote.clone(),
+                insecure,
+                ..Default::default()
+            };
+            App::new(work_dir, &cli_overrides)
+                .ok()
+                .and_then(|app| app.git.current_branch().ok())
+        })
+    };
+
     // Default mode: push
     cmd_push(
         work_dir,
         PushArgs {
             branch,
             remote: args.remote.clone(),
-            topic: if args.no_topic { None } else { args.topic },
+            topic,
             wip: args.wip,
             ready: args.ready,
             private: args.private,
@@ -466,33 +514,36 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
             cc: args.cc,
             hashtags: args.hashtags,
             message: args.message,
-            notify: args.notify,
+            notify: args.notify.map(|n| n.to_string()),
             no_rebase: args.no_rebase,
             dry_run: args.dry_run,
             yes: args.yes,
             new_changeid: false, // already handled above
+            no_thin: args.no_thin,
         },
         insecure,
     )
     .await?;
 
-    // Post-push: --finish checks out default branch and deletes topic branch
+    // Post-push: --finish checks out default branch and deletes topic branch (Task B2)
     if let Some(topic_branch) = current_branch_name {
-        let cli_overrides = CliOverrides {
-            remote: args.remote,
-            insecure,
-            ..Default::default()
-        };
-        let app = App::new(work_dir, &cli_overrides)?;
-        let default_branch = app.config.branch.clone();
-        let root = app.git.root()?;
-        tracing::info!(
-            "Finishing: checking out {} and deleting {}...",
-            default_branch,
-            topic_branch
-        );
-        subprocess::git_checkout(&default_branch, &root)?;
-        subprocess::git_delete_branch(&topic_branch, &root)?;
+        if !args.dry_run {
+            let cli_overrides = CliOverrides {
+                remote: args.remote,
+                insecure,
+                ..Default::default()
+            };
+            let app = App::new(work_dir, &cli_overrides)?;
+            let default_branch = app.config.branch.clone();
+            let root = app.git.root()?;
+            tracing::info!(
+                "Finishing: checking out {} and deleting {}...",
+                default_branch,
+                topic_branch
+            );
+            subprocess::git_checkout(&default_branch, &root)?;
+            subprocess::git_delete_branch(&topic_branch, &root)?;
+        }
     }
 
     Ok(())
@@ -516,9 +567,23 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     let branch = args.branch.unwrap_or_else(|| app.config.branch.clone());
     let remote = args.remote.unwrap_or_else(|| app.config.remote.clone());
 
-    // Validate Change-Id in HEAD
+    // Check Change-Id status with better error handling (Task M15)
     let commit_msg = app.git.head_commit_message()?;
-    push::validate_change_id(&commit_msg)?;
+    let hook_installed = app
+        .git
+        .hooks_dir()
+        .map(|d| d.join("commit-msg").exists())
+        .unwrap_or(false);
+    match push::check_change_id_status(&commit_msg, hook_installed) {
+        ChangeIdStatus::Present(_) => {}
+        ChangeIdStatus::MissingCanAutoAmend => {
+            eprintln!("No Change-Id found; amending commit to add one...");
+            subprocess::git_exec(&["commit", "--amend", "--no-edit"], &root)?;
+        }
+        ChangeIdStatus::MissingNeedHook => {
+            anyhow::bail!("HEAD commit is missing a Change-Id trailer. Run `grt setup` to install the commit-msg hook, then amend the commit");
+        }
+    }
 
     // Count unpushed commits
     let count = subprocess::count_unpushed_commits(&remote, &branch, &root)?;
@@ -551,18 +616,48 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
         hashtags: args.hashtags,
         message: args.message,
         notify: args.notify,
-        no_rebase: args.no_rebase,
     };
 
     let refspec = push::build_refspec(&opts)?;
 
+    // Dry-run: show full command with all flags (Task L13)
     if args.dry_run {
-        println!("git push {remote} {refspec}");
+        let mut dry_args: Vec<&str> = vec![
+            "git",
+            "-c",
+            "color.remote=always",
+            "push",
+            "--no-follow-tags",
+        ];
+        if args.no_thin {
+            dry_args.push("--no-thin");
+        }
+        dry_args.push(&remote);
+        dry_args.push(&refspec);
+        println!("{}", dry_args.join(" "));
         return Ok(());
     }
 
+    // Build push args with --no-follow-tags, color remote, and optional --no-thin
+    // (Tasks M6, M7, L13, L15)
+    let mut push_args: Vec<&str> = vec!["-c", "color.remote=always", "push", "--no-follow-tags"];
+    if args.no_thin {
+        push_args.push("--no-thin");
+    }
+    push_args.push(&remote);
+    push_args.push(&refspec);
+
     eprintln!("Pushing {count} commit(s) to {remote}/{branch}...");
-    subprocess::git_exec(&["push", &remote, &refspec], &root)?;
+
+    // Catch push errors and suggest --no-thin for "Missing tree" (Task L14)
+    if let Err(e) = subprocess::git_exec(&push_args, &root) {
+        let msg = format!("{e:#}");
+        if msg.contains("Missing tree") || msg.contains("missing tree") {
+            eprintln!("hint: Consider trying again with --no-thin");
+        }
+        return Err(e);
+    }
+
     eprintln!("Push successful.");
     Ok(())
 }
@@ -1041,5 +1136,135 @@ mod tests {
     fn exit_code_malformed_input() {
         let err = anyhow::anyhow!("compare argument must be CHANGE,PS[-PS]");
         assert_eq!(exit_code_for_error(&err), 3);
+    }
+
+    // === Task B2: --finish guard on dry_run ===
+
+    #[test]
+    fn parse_review_finish_flag() {
+        let cli = Cli::parse_from(["grt", "review", "-f"]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.finish);
+            assert!(!args.dry_run);
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    #[test]
+    fn parse_review_finish_with_dry_run() {
+        let cli = Cli::parse_from(["grt", "review", "-f", "-n"]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.finish);
+            assert!(args.dry_run);
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    // === Task H2: force_rebase flag parsing ===
+
+    #[test]
+    fn parse_review_force_rebase() {
+        let cli = Cli::parse_from(["grt", "review", "-F"]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.force_rebase);
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    // === Task H3: default topic to branch name ===
+
+    #[test]
+    fn parse_review_no_topic_flag() {
+        let cli = Cli::parse_from(["grt", "review", "-T"]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.no_topic);
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    // === Task M7: no_thin flag in PushArgs ===
+
+    #[test]
+    fn parse_push_no_thin() {
+        let cli = Cli::parse_from(["grt", "push", "--no-thin"]);
+        if let Commands::Push(args) = cli.command {
+            assert!(args.no_thin);
+        } else {
+            panic!("expected Push command");
+        }
+    }
+
+    #[test]
+    fn parse_push_no_thin_default_false() {
+        let cli = Cli::parse_from(["grt", "push"]);
+        if let Commands::Push(args) = cli.command {
+            assert!(!args.no_thin);
+        } else {
+            panic!("expected Push command");
+        }
+    }
+
+    // === Task M14: --color/--no-color warnings ===
+
+    #[test]
+    fn git_review_parse_color_flag() {
+        let cli = GitReviewCli::parse_from(["git-review", "--color", "always", "main"]);
+        assert_eq!(cli.color.as_deref(), Some("always"));
+    }
+
+    // === Task M16: --setup --finish together ===
+
+    #[test]
+    fn parse_review_setup_and_finish() {
+        // setup is in the "mode" group, but finish is not, so they can coexist
+        let cli = Cli::parse_from(["grt", "review", "-s", "-f"]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.setup);
+            assert!(args.finish);
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    // === Task L2: --license flag ===
+
+    #[test]
+    fn git_review_parse_license() {
+        let cli = GitReviewCli::parse_from(["git-review", "--license"]);
+        assert!(cli.license);
+    }
+
+    #[test]
+    fn git_review_license_default_false() {
+        let cli = GitReviewCli::parse_from(["git-review", "main"]);
+        assert!(!cli.license);
+    }
+
+    // === Task L13: dry-run shows full push command ===
+
+    #[test]
+    fn parse_push_dry_run_flag() {
+        let cli = Cli::parse_from(["grt", "push", "--dry-run"]);
+        if let Commands::Push(args) = cli.command {
+            assert!(args.dry_run);
+        } else {
+            panic!("expected Push command");
+        }
+    }
+
+    // === Task M7: no_thin threading through review ===
+
+    #[test]
+    fn parse_review_no_thin() {
+        let cli = Cli::parse_from(["grt", "review", "--no-thin"]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.no_thin);
+        } else {
+            panic!("expected Review command");
+        }
     }
 }

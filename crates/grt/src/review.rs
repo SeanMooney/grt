@@ -10,6 +10,30 @@ use crate::gerrit::{ChangeInfo, RevisionInfo};
 use crate::list;
 use crate::subprocess;
 
+/// Allowed notification levels for Gerrit push.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum NotifyLevel {
+    #[value(name = "NONE")]
+    None,
+    #[value(name = "OWNER")]
+    Owner,
+    #[value(name = "OWNER_REVIEWERS")]
+    OwnerReviewers,
+    #[value(name = "ALL")]
+    All,
+}
+
+impl std::fmt::Display for NotifyLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NotifyLevel::None => write!(f, "NONE"),
+            NotifyLevel::Owner => write!(f, "OWNER"),
+            NotifyLevel::OwnerReviewers => write!(f, "OWNER_REVIEWERS"),
+            NotifyLevel::All => write!(f, "ALL"),
+        }
+    }
+}
+
 /// ReviewArgs mirrors git-review's exact flag set.
 ///
 /// Shared between the `grt review` subcommand and the busybox `git-review`
@@ -66,6 +90,10 @@ pub struct ReviewArgs {
     #[arg(short = 'F', long)]
     pub force_rebase: bool,
 
+    /// Keep rebase after pushing (used with force-rebase)
+    #[arg(short = 'K', long, conflicts_with = "no_rebase")]
+    pub keep_rebase: bool,
+
     // === Track (mutually exclusive) ===
     /// Use the upstream tracking branch as the target
     #[arg(long, conflicts_with = "no_track")]
@@ -112,8 +140,8 @@ pub struct ReviewArgs {
     pub hashtags: Vec<String>,
 
     /// Notification setting (NONE, OWNER, OWNER_REVIEWERS, ALL)
-    #[arg(long, value_name = "LEVEL")]
-    pub notify: Option<String>,
+    #[arg(long, value_enum, value_name = "LEVEL")]
+    pub notify: Option<NotifyLevel>,
 
     /// Review message
     #[arg(long, value_name = "TEXT")]
@@ -272,6 +300,10 @@ pub fn find_target_revision(
 ///
 /// Uses `review/<owner>/<topic>` when both are available,
 /// otherwise falls back to `review/<change_number>/<patchset>`.
+///
+/// NOTE: This differs from git-review which uses `review/<change>[-patch<N>]`.
+/// The owner/topic scheme is intentional to provide better branch names
+/// when working with multiple changes.
 pub fn download_branch_name(change: &ChangeInfo, patchset: i32) -> String {
     if let Some(ref topic) = change.topic {
         if let Some(ref owner) = change.owner {
@@ -311,8 +343,11 @@ pub async fn cmd_review_download(app: &mut App, change_arg: &str) -> Result<()> 
         change_id, ps_num
     );
     subprocess::git_fetch_ref(&remote, git_ref, &root)?;
-    subprocess::git_checkout_new_branch(&branch, "FETCH_HEAD", &root)?;
-    eprintln!("Switched to new branch '{branch}'");
+    subprocess::git_checkout_or_reset_branch(&branch, "FETCH_HEAD", &root)?;
+    // Set upstream tracking for the new branch
+    let upstream = format!("{remote}/{}", change.branch.as_deref().unwrap_or("master"));
+    subprocess::git_set_upstream_tracking(&branch, &upstream, &root)?;
+    eprintln!("Switched to branch '{branch}'");
 
     Ok(())
 }
@@ -421,7 +456,18 @@ pub fn parse_compare_arg(input: &str) -> Result<(String, i32, Option<i32>)> {
 ///
 /// When `ps_to` is `None`, diffs against the change's current revision.
 pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> {
-    let (change_id, ps_from, ps_to) = parse_compare_arg(compare_arg)?;
+    // TODO: git-review supports rebasing in compare mode (cmd.py compare flow).
+    // Our implementation uses direct SHA-based diff which is simpler but doesn't
+    // support the rebase-based comparison workflow.
+    // TODO: git-review validates old_ps != new_ps. We skip this validation.
+
+    // Normalize URL if provided
+    let normalized = if compare_arg.starts_with("http") {
+        normalize_change_arg(compare_arg)
+    } else {
+        compare_arg.to_string()
+    };
+    let (change_id, ps_from, ps_to) = parse_compare_arg(&normalized)?;
 
     app.authenticate_and_verify().await?;
 
@@ -483,6 +529,22 @@ pub async fn cmd_review_list(app: &App, branch: Option<&str>, verbose: bool) -> 
 
     print!("{output}");
     Ok(())
+}
+
+/// Warn about flags that are parsed but not yet implemented.
+pub fn warn_unused_flags(args: &ReviewArgs) {
+    if args.remote_hook {
+        tracing::warn!("--remote-hook is not yet implemented");
+    }
+    if args.use_pushurl {
+        tracing::warn!("--use-pushurl is not yet implemented");
+    }
+    if args.force_rebase {
+        tracing::warn!("--force-rebase: pre-push rebase not yet implemented");
+    }
+    if args.no_custom_script {
+        tracing::warn!("--no-custom-script is not yet implemented");
+    }
 }
 
 #[cfg(test)]
@@ -824,7 +886,13 @@ mod tests {
     #[test]
     fn parse_notify() {
         let args = parse_review(&["--notify", "NONE"]);
-        assert_eq!(args.notify.as_deref(), Some("NONE"));
+        assert_eq!(args.notify, Some(NotifyLevel::None));
+    }
+
+    #[test]
+    fn parse_notify_invalid_value_rejected() {
+        let result = try_parse_review(&["--notify", "INVALID"]);
+        assert!(result.is_err(), "invalid notify value should be rejected");
     }
 
     #[test]
@@ -975,7 +1043,7 @@ mod tests {
         assert_eq!(args.reviewers, vec!["alice"]);
         assert_eq!(args.cc, vec!["bob"]);
         assert_eq!(args.hashtags, vec!["urgent"]);
-        assert_eq!(args.notify.as_deref(), Some("ALL"));
+        assert_eq!(args.notify, Some(NotifyLevel::All));
         assert_eq!(args.message.as_deref(), Some("ready"));
         assert!(args.dry_run);
         assert!(args.no_rebase);
@@ -1240,5 +1308,86 @@ mod tests {
             result.unwrap_err().to_string().contains("empty"),
             "error should mention empty change number"
         );
+    }
+
+    // === keep_rebase flag ===
+
+    #[test]
+    fn parse_keep_rebase_short() {
+        let args = parse_review(&["-K"]);
+        assert!(args.keep_rebase);
+    }
+
+    #[test]
+    fn parse_keep_rebase_long() {
+        let args = parse_review(&["--keep-rebase"]);
+        assert!(args.keep_rebase);
+    }
+
+    #[test]
+    fn keep_rebase_and_no_rebase_conflict() {
+        let result = try_parse_review(&["-K", "-R"]);
+        assert!(result.is_err(), "keep-rebase and no-rebase should conflict");
+    }
+
+    #[test]
+    fn keep_rebase_with_force_rebase() {
+        let args = parse_review(&["-K", "-F"]);
+        assert!(args.keep_rebase);
+        assert!(args.force_rebase);
+    }
+
+    // === warn_unused_flags ===
+
+    #[test]
+    fn warn_unused_flags_no_warnings_on_defaults() {
+        let args = parse_review(&[]);
+        // Should not panic or error
+        warn_unused_flags(&args);
+    }
+
+    #[test]
+    fn warn_unused_flags_with_remote_hook() {
+        let args = parse_review(&["--remote-hook"]);
+        // Should not panic; we can't easily check tracing output here
+        warn_unused_flags(&args);
+    }
+
+    #[test]
+    fn warn_unused_flags_with_use_pushurl() {
+        let args = parse_review(&["--use-pushurl"]);
+        warn_unused_flags(&args);
+    }
+
+    #[test]
+    fn warn_unused_flags_with_force_rebase() {
+        let args = parse_review(&["-F"]);
+        warn_unused_flags(&args);
+    }
+
+    #[test]
+    fn warn_unused_flags_with_no_custom_script() {
+        let args = parse_review(&["--no-custom-script"]);
+        warn_unused_flags(&args);
+    }
+
+    // === normalize_change_arg for compare URLs ===
+
+    #[test]
+    fn normalize_compare_url_extracts_change_id() {
+        let normalized = normalize_change_arg("https://review.example.com/c/proj/+/12345/1");
+        assert_eq!(normalized, "12345,1");
+    }
+
+    #[test]
+    fn normalize_compare_plain_passthrough() {
+        // Non-URL compare args should pass through as-is
+        let input = "12345,1-3";
+        let normalized = if input.starts_with("http") {
+            normalize_change_arg(input)
+        } else {
+            input.to_string()
+        };
+        assert_eq!(normalized, "12345,1-3");
     }
 }

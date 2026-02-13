@@ -21,32 +21,34 @@ pub fn build_list_query(project: &str, branch: Option<&str>) -> String {
 /// Format a list of changes for brief output (`-l`).
 ///
 /// Columns: right-aligned number, left-aligned branch, subject.
-/// Returns empty string if changes is empty (matching git-review).
+/// Returns a "no changes" message if the list is empty.
 pub fn format_reviews_text(changes: &[ChangeInfo]) -> String {
     if changes.is_empty() {
-        return String::new();
+        return "No changes found for review\n".to_string();
     }
 
     let num_width = max_number_width(changes);
     let branch_width = changes
         .iter()
-        .map(|c| c.branch.as_deref().unwrap_or("").len())
+        .map(|c| c.branch.as_deref().unwrap_or("-").len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(1);
 
     let mut output = String::new();
     for change in changes {
         let num = change.number.unwrap_or(0);
-        let branch = change.branch.as_deref().unwrap_or("");
-        let subject = change.subject.as_deref().unwrap_or("");
+        let branch = change.branch.as_deref().unwrap_or("-");
+        let subject = change.subject.as_deref().unwrap_or("-");
         use std::fmt::Write;
         let _ = writeln!(
             output,
-            "{num:>num_width$} {branch:<branch_width$} {subject}",
+            "{num:>num_width$}  {branch:<branch_width$}  {subject}",
             num_width = num_width,
             branch_width = branch_width
         );
     }
+    use std::fmt::Write;
+    let _ = writeln!(output, "Found {} item(s) for review", changes.len());
 
     output
 }
@@ -54,39 +56,41 @@ pub fn format_reviews_text(changes: &[ChangeInfo]) -> String {
 /// Format a list of changes for verbose output (`-ll`).
 ///
 /// Columns: right-aligned number, left-aligned branch, left-aligned topic, subject.
-/// Returns empty string if changes is empty (matching git-review).
+/// Returns a "no changes" message if the list is empty.
 pub fn format_reviews_verbose(changes: &[ChangeInfo]) -> String {
     if changes.is_empty() {
-        return String::new();
+        return "No changes found for review\n".to_string();
     }
 
     let num_width = max_number_width(changes);
     let branch_width = changes
         .iter()
-        .map(|c| c.branch.as_deref().unwrap_or("").len())
+        .map(|c| c.branch.as_deref().unwrap_or("-").len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(1);
     let topic_width = changes
         .iter()
-        .map(|c| c.topic.as_deref().unwrap_or("").len())
+        .map(|c| c.topic.as_deref().unwrap_or("-").len())
         .max()
-        .unwrap_or(0);
+        .unwrap_or(1);
 
     let mut output = String::new();
     for change in changes {
         let num = change.number.unwrap_or(0);
-        let branch = change.branch.as_deref().unwrap_or("");
-        let topic = change.topic.as_deref().unwrap_or("");
-        let subject = change.subject.as_deref().unwrap_or("");
+        let branch = change.branch.as_deref().unwrap_or("-");
+        let topic = change.topic.as_deref().unwrap_or("-");
+        let subject = change.subject.as_deref().unwrap_or("-");
         use std::fmt::Write;
         let _ = writeln!(
             output,
-            "{num:>num_width$} {branch:<branch_width$} {topic:<topic_width$} {subject}",
+            "{num:>num_width$}  {branch:<branch_width$}  {topic:<topic_width$}  {subject}",
             num_width = num_width,
             branch_width = branch_width,
             topic_width = topic_width
         );
     }
+    use std::fmt::Write;
+    let _ = writeln!(output, "Found {} item(s) for review", changes.len());
 
     output
 }
@@ -162,15 +166,16 @@ mod tests {
     // === format_reviews_text (brief) ===
 
     #[test]
-    fn text_empty_returns_empty() {
-        assert_eq!(format_reviews_text(&[]), "");
+    fn text_empty_returns_no_changes_message() {
+        assert_eq!(format_reviews_text(&[]), "No changes found for review\n");
     }
 
     #[test]
     fn text_single_change() {
         let changes = vec![make_change(12345, "main", "Fix the bug", None)];
         let output = format_reviews_text(&changes);
-        assert_eq!(output, "12345 main Fix the bug\n");
+        assert!(output.contains("12345  main  Fix the bug"));
+        assert!(output.contains("Found 1 item(s) for review"));
     }
 
     #[test]
@@ -181,13 +186,16 @@ mod tests {
         ];
         let output = format_reviews_text(&changes);
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 2);
-        // Number column should be right-aligned (width 5)
-        assert!(lines[0].starts_with("12345 "));
-        assert!(lines[1].starts_with("   99 "));
+        // 2 data lines + 1 summary line
+        assert_eq!(lines.len(), 3);
+        // Number column should be right-aligned (width 5), double-space separator
+        assert!(lines[0].starts_with("12345  "));
+        assert!(lines[1].starts_with("   99  "));
         // Branch column should be left-aligned (width of longest branch)
-        assert!(lines[0].contains("main                "));
-        assert!(lines[1].contains("feature/long-branch "));
+        assert!(lines[0].contains("main                 "));
+        assert!(lines[1].contains("feature/long-branch  "));
+        // Summary line
+        assert_eq!(lines[2], "Found 2 item(s) for review");
     }
 
     #[test]
@@ -199,25 +207,28 @@ mod tests {
         ];
         let output = format_reviews_text(&changes);
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 3);
-        // All numbers right-aligned to width 5
-        assert!(lines[0].starts_with("    1 "));
-        assert!(lines[1].starts_with("  100 "));
-        assert!(lines[2].starts_with("99999 "));
+        // 3 data lines + 1 summary line
+        assert_eq!(lines.len(), 4);
+        // All numbers right-aligned to width 5, double-space separator
+        assert!(lines[0].starts_with("    1  "));
+        assert!(lines[1].starts_with("  100  "));
+        assert!(lines[2].starts_with("99999  "));
+        assert_eq!(lines[3], "Found 3 item(s) for review");
     }
 
     // === format_reviews_verbose ===
 
     #[test]
-    fn verbose_empty_returns_empty() {
-        assert_eq!(format_reviews_verbose(&[]), "");
+    fn verbose_empty_returns_no_changes_message() {
+        assert_eq!(format_reviews_verbose(&[]), "No changes found for review\n");
     }
 
     #[test]
     fn verbose_single_change_with_topic() {
         let changes = vec![make_change(12345, "main", "Fix the bug", Some("my-topic"))];
         let output = format_reviews_verbose(&changes);
-        assert_eq!(output, "12345 main my-topic Fix the bug\n");
+        assert!(output.contains("12345  main  my-topic  Fix the bug"));
+        assert!(output.contains("Found 1 item(s) for review"));
     }
 
     #[test]
@@ -228,27 +239,32 @@ mod tests {
         ];
         let output = format_reviews_verbose(&changes);
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 2);
-        // Number right-aligned to width 5
-        assert!(lines[0].starts_with("12345 "));
-        assert!(lines[1].starts_with("   99 "));
-        // Topic column present and aligned
-        assert!(lines[0].contains("bugfix      "));
-        assert!(lines[1].contains("new-feature "));
+        // 2 data lines + 1 summary line
+        assert_eq!(lines.len(), 3);
+        // Number right-aligned to width 5, double-space separator
+        assert!(lines[0].starts_with("12345  "));
+        assert!(lines[1].starts_with("   99  "));
+        // Topic column present and aligned with double-space separators
+        assert!(lines[0].contains("bugfix       "));
+        assert!(lines[1].contains("new-feature  "));
+        assert_eq!(lines[2], "Found 2 item(s) for review");
     }
 
     #[test]
-    fn verbose_missing_topics_shown_as_blank() {
+    fn verbose_missing_topics_shown_as_dash() {
         let changes = vec![
             make_change(100, "main", "Has topic", Some("my-topic")),
             make_change(200, "main", "No topic", None),
         ];
         let output = format_reviews_verbose(&changes);
         let lines: Vec<&str> = output.lines().collect();
-        assert_eq!(lines.len(), 2);
+        // 2 data lines + 1 summary line
+        assert_eq!(lines.len(), 3);
         // First line has topic
         assert!(lines[0].contains("my-topic"));
-        // Second line has blank topic column but correct subject
+        // Second line has "-" for missing topic
+        assert!(lines[1].contains("  -        "));
         assert!(lines[1].contains("No topic"));
+        assert_eq!(lines[2], "Found 2 item(s) for review");
     }
 }

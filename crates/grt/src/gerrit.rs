@@ -78,13 +78,19 @@ pub struct GerritClient {
 
 impl GerritClient {
     /// Create a new Gerrit REST client.
-    pub fn new(base_url: Url, credentials: Option<Credentials>) -> Result<Self> {
-        let client = reqwest::Client::builder()
+    ///
+    /// When `ssl_verify` is `false`, TLS certificate verification is disabled.
+    pub fn new(base_url: Url, credentials: Option<Credentials>, ssl_verify: bool) -> Result<Self> {
+        let mut builder = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
-            .user_agent(format!("grt/{}", env!("CARGO_PKG_VERSION")))
-            .build()
-            .context("building HTTP client")?;
+            .user_agent(format!("grt/{}", env!("CARGO_PKG_VERSION")));
+
+        if !ssl_verify {
+            builder = builder.danger_accept_invalid_certs(true);
+        }
+
+        let client = builder.build().context("building HTTP client")?;
 
         Ok(Self {
             client,
@@ -104,13 +110,28 @@ impl GerritClient {
     }
 
     /// Build the full URL for an API endpoint path.
+    ///
+    /// Appends to the base URL's existing path instead of using `Url::join`,
+    /// which would discard any sub-path prefix (e.g. `/gerrit/`).
     fn api_url(&self, path: &str) -> Result<Url> {
         // Gerrit authenticated endpoints use /a/ prefix
         let prefix = if self.credentials.is_some() { "/a" } else { "" };
         let full_path = format!("{}{}", prefix, path);
-        self.base_url
-            .join(&full_path)
-            .context("constructing API URL")
+
+        // Split off any query string so set_path doesn't percent-encode `?`.
+        let (path_part, query_part) = match full_path.split_once('?') {
+            Some((p, q)) => (p, Some(q)),
+            None => (full_path.as_str(), None),
+        };
+
+        let mut url = self.base_url.clone();
+        {
+            let base_path = url.path().trim_end_matches('/');
+            let new_path = format!("{}{}", base_path, path_part);
+            url.set_path(&new_path);
+        }
+        url.set_query(query_part);
+        Ok(url)
     }
 
     /// Build authorization headers if credentials are available.
@@ -581,8 +602,12 @@ mod tests {
             password: "pass".into(),
             auth_type: AuthType::Basic,
         };
-        let client =
-            GerritClient::new(Url::parse("https://example.com").unwrap(), Some(creds)).unwrap();
+        let client = GerritClient::new(
+            Url::parse("https://example.com").unwrap(),
+            Some(creds),
+            true,
+        )
+        .unwrap();
         let headers = client.auth_headers();
         let auth = headers.get(AUTHORIZATION).unwrap().to_str().unwrap();
         assert!(auth.starts_with("Basic "), "expected Basic auth: {auth}");
@@ -596,11 +621,44 @@ mod tests {
             password: "my-token-123".into(),
             auth_type: AuthType::Bearer,
         };
-        let client =
-            GerritClient::new(Url::parse("https://example.com").unwrap(), Some(creds)).unwrap();
+        let client = GerritClient::new(
+            Url::parse("https://example.com").unwrap(),
+            Some(creds),
+            true,
+        )
+        .unwrap();
         let headers = client.auth_headers();
         let auth = headers.get(AUTHORIZATION).unwrap().to_str().unwrap();
         assert_eq!(auth, "Bearer my-token-123");
+    }
+
+    #[test]
+    fn api_url_preserves_base_path() {
+        let client = GerritClient::new(
+            Url::parse("https://example.com/gerrit/").unwrap(),
+            None,
+            true,
+        )
+        .unwrap();
+        let url = client.api_url("/changes/").unwrap();
+        assert_eq!(url.path(), "/gerrit/changes/");
+    }
+
+    #[test]
+    fn api_url_with_auth_prefix() {
+        let creds = Credentials {
+            username: "user".into(),
+            password: "pass".into(),
+            auth_type: AuthType::Basic,
+        };
+        let client = GerritClient::new(
+            Url::parse("https://example.com/gerrit/").unwrap(),
+            Some(creds),
+            true,
+        )
+        .unwrap();
+        let url = client.api_url("/changes/").unwrap();
+        assert_eq!(url.path(), "/gerrit/a/changes/");
     }
 
     #[test]

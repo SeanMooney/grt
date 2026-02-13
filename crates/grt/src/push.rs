@@ -17,7 +17,6 @@ pub struct PushOptions {
     pub hashtags: Vec<String>,
     pub message: Option<String>,
     pub notify: Option<String>,
-    pub no_rebase: bool,
 }
 
 /// Build the refspec for `git push`, e.g. `HEAD:refs/for/main%topic=foo,r=alice`.
@@ -56,11 +55,18 @@ pub fn build_refspec(opts: &PushOptions) -> Result<String> {
 
     for cc in &opts.cc {
         let trimmed = cc.trim();
+        if trimmed.contains(char::is_whitespace) {
+            anyhow::bail!("CC name contains whitespace: {trimmed:?}");
+        }
         options.push(format!("cc={trimmed}"));
     }
 
     for hashtag in &opts.hashtags {
-        options.push(format!("hashtag={hashtag}"));
+        let trimmed = hashtag.trim();
+        if trimmed.contains(char::is_whitespace) {
+            anyhow::bail!("hashtag contains whitespace: {trimmed:?}");
+        }
+        options.push(format!("hashtag={trimmed}"));
     }
 
     if let Some(ref message) = opts.message {
@@ -70,10 +76,6 @@ pub fn build_refspec(opts: &PushOptions) -> Result<String> {
 
     if let Some(ref notify) = opts.notify {
         options.push(format!("notify={notify}"));
-    }
-
-    if opts.no_rebase {
-        options.push("submit=false".to_string());
     }
 
     let refspec = if options.is_empty() {
@@ -101,6 +103,31 @@ pub fn extract_change_id(commit_message: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Status of the Change-Id in a commit message.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChangeIdStatus {
+    /// Change-Id is present and valid.
+    Present(String),
+    /// Change-Id is missing but can be auto-amended (single commit, hook installed).
+    MissingCanAutoAmend,
+    /// Change-Id is missing and hook is not installed (need setup first).
+    MissingNeedHook,
+}
+
+/// Check the Change-Id status of a commit message.
+///
+/// Returns the appropriate status based on whether the Change-Id is present
+/// and whether the hook is installed (for auto-amend capability).
+pub fn check_change_id_status(commit_message: &str, hook_installed: bool) -> ChangeIdStatus {
+    if let Some(id) = extract_change_id(commit_message) {
+        ChangeIdStatus::Present(id)
+    } else if hook_installed {
+        ChangeIdStatus::MissingCanAutoAmend
+    } else {
+        ChangeIdStatus::MissingNeedHook
+    }
 }
 
 /// Validate that the HEAD commit contains a Change-Id trailer.
@@ -221,5 +248,45 @@ mod tests {
             id.as_deref(),
             Some("Iabcdef1234567890abcdef1234567890abcdef12")
         );
+    }
+
+    #[test]
+    fn build_refspec_rejects_whitespace_in_cc() {
+        let mut o = opts("main");
+        o.cc = vec!["alice bob".into()];
+        let result = build_refspec(&o);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_refspec_rejects_whitespace_in_hashtag() {
+        let mut o = opts("main");
+        o.hashtags = vec!["my tag".into()];
+        let result = build_refspec(&o);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn check_change_id_status_present() {
+        let msg = "Fix bug\n\nChange-Id: I1234567890abcdef1234567890abcdef12345678\n";
+        let status = check_change_id_status(msg, false);
+        assert_eq!(
+            status,
+            ChangeIdStatus::Present("I1234567890abcdef1234567890abcdef12345678".to_string())
+        );
+    }
+
+    #[test]
+    fn check_change_id_status_missing_can_auto_amend() {
+        let msg = "Fix bug\n\nSome description.\n";
+        let status = check_change_id_status(msg, true);
+        assert_eq!(status, ChangeIdStatus::MissingCanAutoAmend);
+    }
+
+    #[test]
+    fn check_change_id_status_missing_need_hook() {
+        let msg = "Fix bug\n\nSome description.\n";
+        let status = check_change_id_status(msg, false);
+        assert_eq!(status, ChangeIdStatus::MissingNeedHook);
     }
 }

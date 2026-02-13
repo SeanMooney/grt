@@ -7,7 +7,7 @@ use url::Url;
 
 fn test_client(server_url: &str) -> GerritClient {
     let url = Url::parse(server_url).unwrap();
-    GerritClient::new(url, None).unwrap()
+    GerritClient::new(url, None, true).unwrap()
 }
 
 fn test_client_with_auth(server_url: &str) -> GerritClient {
@@ -17,7 +17,7 @@ fn test_client_with_auth(server_url: &str) -> GerritClient {
         password: "testpass".into(),
         auth_type: grt::gerrit::AuthType::Basic,
     };
-    GerritClient::new(url, Some(creds)).unwrap()
+    GerritClient::new(url, Some(creds), true).unwrap()
 }
 
 #[tokio::test]

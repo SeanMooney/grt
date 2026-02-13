@@ -23,6 +23,12 @@ pub struct GerritConfig {
     pub branch: String,
     pub remote: String,
     pub scheme: String,
+    pub default_rebase: bool,
+    pub track: bool,
+    pub notopic: bool,
+    pub usepushurl: bool,
+    pub ssl_verify: bool,
+    pub username: Option<String>,
 }
 
 impl GerritConfig {
@@ -46,9 +52,15 @@ impl Default for GerritConfig {
             ssh_port: None,
             http_port: None,
             project: String::new(),
-            branch: String::from("main"),
+            branch: String::from("master"),
             remote: String::from("gerrit"),
-            scheme: String::from("https"),
+            scheme: String::from("ssh"),
+            default_rebase: true,
+            track: false,
+            notopic: false,
+            usepushurl: false,
+            ssl_verify: true,
+            username: None,
         }
     }
 }
@@ -161,8 +173,9 @@ pub fn parse_gitreview(content: &str) -> Result<HashMap<String, String>> {
         }
 
         if in_gerrit_section {
-            if let Some((key, value)) = trimmed.split_once('=') {
-                values.insert(key.trim().to_string(), value.trim().to_string());
+            if let Some((key, value)) = trimmed.split_once('=').or_else(|| trimmed.split_once(':'))
+            {
+                values.insert(key.trim().to_lowercase(), value.trim().to_string());
             }
         }
     }
@@ -181,6 +194,14 @@ pub fn parse_gitreview(content: &str) -> Result<HashMap<String, String>> {
 /// name without the suffix. This matches git-review's behavior.
 fn strip_git_suffix(project: &str) -> String {
     project.strip_suffix(".git").unwrap_or(project).to_string()
+}
+
+/// Parse a string value as a boolean.
+///
+/// Returns `false` for `"0"`, `"false"`, and `"no"` (case-insensitive).
+/// Returns `true` for all other values.
+fn parse_bool_value(value: &str) -> bool {
+    !matches!(value.trim().to_lowercase().as_str(), "0" | "false" | "no")
 }
 
 /// Load configuration by layering sources: .gitreview, grt config, git config, CLI overrides.
@@ -216,6 +237,18 @@ pub fn load_config(
         if let Some(scheme) = values.get("scheme") {
             config.scheme = scheme.clone();
         }
+        if let Some(val) = values.get("defaultrebase") {
+            config.default_rebase = parse_bool_value(val);
+        }
+        if let Some(val) = values.get("track") {
+            config.track = parse_bool_value(val);
+        }
+        if let Some(val) = values.get("notopic") {
+            config.notopic = parse_bool_value(val);
+        }
+        if let Some(val) = values.get("usepushurl") {
+            config.usepushurl = parse_bool_value(val);
+        }
     }
 
     // Layer 2: grt native TOML config
@@ -249,7 +282,9 @@ pub fn load_config(
     }
 
     // Layer 3: git config (gitreview.*)
-    if let Some(host) = git_config_value("gitreview.host") {
+    if let Some(host) =
+        git_config_value("gitreview.host").or_else(|| git_config_value("gitreview.hostname"))
+    {
         config.host = host;
     }
     if let Some(port) = git_config_value("gitreview.port") {
@@ -266,6 +301,19 @@ pub fn load_config(
     }
     if let Some(remote) = git_config_value("gitreview.remote") {
         config.remote = remote;
+    }
+    if let Some(username) = git_config_value("gitreview.username") {
+        config.username = Some(username);
+    }
+
+    // SSL verification: git config + environment
+    if let Some(ssl) = git_config_value("http.sslVerify") {
+        if ssl.eq_ignore_ascii_case("false") {
+            config.ssl_verify = false;
+        }
+    }
+    if std::env::var("GIT_SSL_NO_VERIFY").is_ok() {
+        config.ssl_verify = false;
     }
 
     // Layer 4: CLI overrides (highest precedence)
@@ -287,6 +335,13 @@ pub fn load_config(
     if let Some(ref scheme) = cli.scheme {
         config.scheme = scheme.clone();
     }
+
+    // Default SSH port when using ssh scheme
+    if config.scheme == "ssh" && config.ssh_port.is_none() {
+        config.ssh_port = Some(29418);
+    }
+
+    // TODO: implement insteadOf / pushInsteadOf URL rewriting (git-review cmd.py:527-604)
 
     Ok(config)
 }
@@ -364,9 +419,15 @@ project=my/project
     #[test]
     fn config_defaults() {
         let config = GerritConfig::default();
-        assert_eq!(config.branch, "main");
+        assert_eq!(config.branch, "master");
         assert_eq!(config.remote, "gerrit");
-        assert_eq!(config.scheme, "https");
+        assert_eq!(config.scheme, "ssh");
+        assert!(config.default_rebase);
+        assert!(!config.track);
+        assert!(!config.notopic);
+        assert!(!config.usepushurl);
+        assert!(config.ssl_verify);
+        assert!(config.username.is_none());
     }
 
     #[test]
@@ -441,9 +502,6 @@ project=my/project
         let config = load_config(dir.path(), |_| None, &CliOverrides::default()).unwrap();
         assert_eq!(config.ssh_port, Some(29418));
         assert_eq!(config.http_port, None);
-        // REST API URL should use standard HTTPS port
-        let url = config.gerrit_base_url().unwrap();
-        assert_eq!(url.as_str(), "https://review.opendev.org/");
     }
 
     fn write_credentials_file(dir: &Path, content: &str) -> std::path::PathBuf {
@@ -635,5 +693,210 @@ auth_type = "basic"
             config.project, "openstack/nova",
             ".git suffix should be stripped from project name"
         );
+    }
+
+    #[test]
+    fn parse_gitreview_colon_delimiter() {
+        let content = "\
+[gerrit]
+host: review.example.com
+port: 29418
+project: my/project
+";
+        let values = parse_gitreview(content).unwrap();
+        assert_eq!(values.get("host").unwrap(), "review.example.com");
+        assert_eq!(values.get("port").unwrap(), "29418");
+        assert_eq!(values.get("project").unwrap(), "my/project");
+    }
+
+    #[test]
+    fn parse_gitreview_case_insensitive_keys() {
+        let content = "\
+[gerrit]
+Host=review.example.com
+PORT=29418
+Project=my/project
+DefaultBranch=develop
+";
+        let values = parse_gitreview(content).unwrap();
+        assert_eq!(values.get("host").unwrap(), "review.example.com");
+        assert_eq!(values.get("port").unwrap(), "29418");
+        assert_eq!(values.get("project").unwrap(), "my/project");
+        assert_eq!(values.get("defaultbranch").unwrap(), "develop");
+    }
+
+    #[test]
+    fn gitreview_hostname_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(&gitreview, "[gerrit]\nproject=my/project\n").unwrap();
+
+        let config = load_config(
+            dir.path(),
+            |key| match key {
+                "gitreview.hostname" => Some("fallback.example.com".to_string()),
+                _ => None,
+            },
+            &CliOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(config.host, "fallback.example.com");
+    }
+
+    #[test]
+    fn gitreview_host_takes_precedence_over_hostname() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(&gitreview, "[gerrit]\nproject=my/project\n").unwrap();
+
+        let config = load_config(
+            dir.path(),
+            |key| match key {
+                "gitreview.host" => Some("primary.example.com".to_string()),
+                "gitreview.hostname" => Some("fallback.example.com".to_string()),
+                _ => None,
+            },
+            &CliOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(config.host, "primary.example.com");
+    }
+
+    #[test]
+    fn default_ssh_port_29418() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(
+            &gitreview,
+            "[gerrit]\nhost=review.example.com\nproject=my/project\n",
+        )
+        .unwrap();
+
+        let config = load_config(dir.path(), |_| None, &CliOverrides::default()).unwrap();
+        assert_eq!(config.scheme, "ssh");
+        assert_eq!(
+            config.ssh_port,
+            Some(29418),
+            "SSH port should default to 29418 when scheme is ssh"
+        );
+    }
+
+    #[test]
+    fn no_default_ssh_port_when_https() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(
+            &gitreview,
+            "[gerrit]\nhost=review.example.com\nproject=my/project\nscheme=https\n",
+        )
+        .unwrap();
+
+        let config = load_config(dir.path(), |_| None, &CliOverrides::default()).unwrap();
+        assert_eq!(config.scheme, "https");
+        assert_eq!(
+            config.ssh_port, None,
+            "SSH port should not be set when scheme is https and no port specified"
+        );
+    }
+
+    #[test]
+    fn ssl_verify_default_true() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(
+            &gitreview,
+            "[gerrit]\nhost=review.example.com\nproject=my/project\n",
+        )
+        .unwrap();
+
+        let config = load_config(dir.path(), |_| None, &CliOverrides::default()).unwrap();
+        assert!(config.ssl_verify, "ssl_verify should default to true");
+    }
+
+    #[test]
+    fn ssl_verify_git_config_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(
+            &gitreview,
+            "[gerrit]\nhost=review.example.com\nproject=my/project\n",
+        )
+        .unwrap();
+
+        let config = load_config(
+            dir.path(),
+            |key| match key {
+                "http.sslVerify" => Some("false".to_string()),
+                _ => None,
+            },
+            &CliOverrides::default(),
+        )
+        .unwrap();
+        assert!(
+            !config.ssl_verify,
+            "ssl_verify should be false when http.sslVerify is false"
+        );
+    }
+
+    #[test]
+    fn parse_bool_value_truthy() {
+        assert!(parse_bool_value("1"));
+        assert!(parse_bool_value("true"));
+        assert!(parse_bool_value("True"));
+        assert!(parse_bool_value("TRUE"));
+        assert!(parse_bool_value("yes"));
+        assert!(parse_bool_value("Yes"));
+        assert!(parse_bool_value("anything"));
+    }
+
+    #[test]
+    fn parse_bool_value_falsy() {
+        assert!(!parse_bool_value("0"));
+        assert!(!parse_bool_value("false"));
+        assert!(!parse_bool_value("False"));
+        assert!(!parse_bool_value("FALSE"));
+        assert!(!parse_bool_value("no"));
+        assert!(!parse_bool_value("No"));
+        assert!(!parse_bool_value("NO"));
+        assert!(!parse_bool_value("  false  "));
+    }
+
+    #[test]
+    fn gitreview_bool_fields_parsed() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(
+            &gitreview,
+            "[gerrit]\nhost=review.example.com\nproject=my/project\ndefaultrebase=0\ntrack=true\nnotopic=yes\nusepushurl=false\n",
+        )
+        .unwrap();
+
+        let config = load_config(dir.path(), |_| None, &CliOverrides::default()).unwrap();
+        assert!(!config.default_rebase, "defaultrebase=0 should be false");
+        assert!(config.track, "track=true should be true");
+        assert!(config.notopic, "notopic=yes should be true");
+        assert!(!config.usepushurl, "usepushurl=false should be false");
+    }
+
+    #[test]
+    fn gitreview_username_from_git_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let gitreview = dir.path().join(".gitreview");
+        std::fs::write(
+            &gitreview,
+            "[gerrit]\nhost=review.example.com\nproject=my/project\n",
+        )
+        .unwrap();
+
+        let config = load_config(
+            dir.path(),
+            |key| match key {
+                "gitreview.username" => Some("testuser".to_string()),
+                _ => None,
+            },
+            &CliOverrides::default(),
+        )
+        .unwrap();
+        assert_eq!(config.username.as_deref(), Some("testuser"));
     }
 }

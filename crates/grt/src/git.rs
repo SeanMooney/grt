@@ -99,6 +99,12 @@ impl GitRepo {
         Ok(!output.stdout.is_empty())
     }
 
+    /// Return the current branch name, or a default value if HEAD is detached.
+    pub fn current_branch_or_default(&self, default: &str) -> String {
+        self.current_branch()
+            .unwrap_or_else(|_| default.to_string())
+    }
+
     /// Return the message of the HEAD commit.
     pub fn head_commit_message(&self) -> Result<String> {
         let head = self.repo.head_commit().context("reading HEAD commit")?;
@@ -204,6 +210,28 @@ mod tests {
         let repo = GitRepo::open(dir.path()).unwrap();
         let result = repo.upstream_branch().unwrap();
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn current_branch_or_default_on_detached_head() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        // Detach HEAD
+        std::process::Command::new("git")
+            .args(["checkout", "--detach", "HEAD"])
+            .current_dir(dir.path())
+            .output()
+            .expect("git checkout --detach failed");
+        let repo = GitRepo::open(dir.path()).unwrap();
+        assert_eq!(repo.current_branch_or_default("master"), "master");
+    }
+
+    #[test]
+    fn current_branch_or_default_on_attached_head() {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path());
+        let repo = GitRepo::open(dir.path()).unwrap();
+        assert_eq!(repo.current_branch_or_default("master"), "main");
     }
 
     #[test]

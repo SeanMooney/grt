@@ -6,11 +6,19 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
+/// Create a git command with locale forced to C for reliable parsing.
+fn git_command(args: &[&str], work_dir: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(work_dir)
+        .env("LANG", "C")
+        .env("LANGUAGE", "C");
+    cmd
+}
+
 /// Run a git command and return its stdout output.
 pub fn git_output(args: &[&str], work_dir: &Path) -> Result<String> {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(work_dir)
+    let output = git_command(args, work_dir)
         .output()
         .with_context(|| format!("running git {}", args.join(" ")))?;
 
@@ -30,9 +38,7 @@ pub fn git_output(args: &[&str], work_dir: &Path) -> Result<String> {
 
 /// Run a git command, inheriting stdout/stderr for interactive output.
 pub fn git_exec(args: &[&str], work_dir: &Path) -> Result<()> {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(work_dir)
+    let status = git_command(args, work_dir)
         .status()
         .with_context(|| format!("running git {}", args.join(" ")))?;
 
@@ -101,7 +107,14 @@ pub fn git_cherry_pick_no_commit(commit: &str, work_dir: &Path) -> Result<()> {
 }
 
 /// Fill credentials from git credential helper.
-pub fn git_credential_fill(url: &str, work_dir: &Path) -> Result<(String, String)> {
+///
+/// Returns `Ok(Some((username, password)))` if credentials were found,
+/// `Ok(None)` if the credential helper failed or did not return both fields.
+///
+/// Note: We send protocol= and host= fields separately. The original git-review
+/// sends url=<full_url> instead. Both formats are valid per git-credential(1),
+/// but some credential helpers may behave differently.
+pub fn git_credential_fill(url: &str, work_dir: &Path) -> Result<Option<(String, String)>> {
     use std::process::Stdio;
 
     let parsed = url::Url::parse(url).context("parsing URL for credential fill")?;
@@ -114,6 +127,8 @@ pub fn git_credential_fill(url: &str, work_dir: &Path) -> Result<(String, String
     let mut child = Command::new("git")
         .args(["credential", "fill"])
         .current_dir(work_dir)
+        .env("LANG", "C")
+        .env("LANGUAGE", "C")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -132,7 +147,7 @@ pub fn git_credential_fill(url: &str, work_dir: &Path) -> Result<(String, String
         .context("waiting for git credential fill")?;
 
     if !output.status.success() {
-        anyhow::bail!("git credential fill failed");
+        return Ok(None);
     }
 
     let stdout =
@@ -149,8 +164,8 @@ pub fn git_credential_fill(url: &str, work_dir: &Path) -> Result<(String, String
     }
 
     match (username, password) {
-        (Some(u), Some(p)) => Ok((u, p)),
-        _ => anyhow::bail!("git credential fill did not return username/password"),
+        (Some(u), Some(p)) => Ok(Some((u, p))),
+        _ => Ok(None),
     }
 }
 
@@ -175,6 +190,8 @@ pub fn git_credential_approve(
     let mut child = Command::new("git")
         .args(["credential", "approve"])
         .current_dir(work_dir)
+        .env("LANG", "C")
+        .env("LANGUAGE", "C")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -211,6 +228,8 @@ pub fn git_credential_reject(
     let mut child = Command::new("git")
         .args(["credential", "reject"])
         .current_dir(work_dir)
+        .env("LANG", "C")
+        .env("LANGUAGE", "C")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -263,6 +282,42 @@ pub fn git_fetch_ref_sha(remote: &str, git_ref: &str, work_dir: &Path) -> Result
 /// Diff two commits, inheriting stdout/stderr for interactive output.
 pub fn git_diff(commit_a: &str, commit_b: &str, work_dir: &Path) -> Result<()> {
     git_exec(&["diff", commit_a, commit_b], work_dir)
+}
+
+/// Set the upstream tracking branch for a local branch.
+pub fn git_set_upstream_tracking(branch: &str, upstream: &str, work_dir: &Path) -> Result<()> {
+    git_exec(&["branch", "--set-upstream-to", upstream, branch], work_dir)
+}
+
+/// Checkout a branch, creating it if needed. If the branch already exists,
+/// checks it out and resets to the start point (preserving working tree changes).
+///
+/// This mirrors git-review's behavior: try `checkout -b`, and on failure
+/// fall back to `checkout` + `reset --keep`.
+pub fn git_checkout_or_reset_branch(
+    branch: &str,
+    start_point: &str,
+    work_dir: &Path,
+) -> Result<()> {
+    match git_exec(&["checkout", "-b", branch, start_point], work_dir) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            // Branch already exists — check it out and reset to start point
+            git_exec(&["checkout", branch], work_dir).context("checking out existing branch")?;
+            git_exec(&["reset", "--keep", start_point], work_dir)
+                .context("resetting branch to new start point")
+        }
+    }
+}
+
+/// Check if a git remote exists and return its URL.
+///
+/// Returns `Ok(Some(url))` if the remote exists, `Ok(None)` if it doesn't.
+pub fn check_remote_exists(remote: &str, work_dir: &Path) -> Result<Option<String>> {
+    match git_output(&["remote", "get-url", remote], work_dir) {
+        Ok(url) => Ok(Some(url)),
+        Err(_) => Ok(None),
+    }
 }
 
 #[cfg(test)]

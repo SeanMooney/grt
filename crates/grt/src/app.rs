@@ -43,8 +43,14 @@ impl App {
             );
         }
 
+        if config.project.is_empty() {
+            anyhow::bail!(
+                "no Gerrit project configured. Set project in .gitreview or gitreview.project in git config"
+            );
+        }
+
         let base_url = config.gerrit_base_url()?;
-        let gerrit = GerritClient::new(base_url, None)?;
+        let gerrit = GerritClient::new(base_url, None, config.ssl_verify)?;
 
         Ok(Self {
             config,
@@ -95,8 +101,11 @@ impl App {
         // Fall back to git credential helper (always Basic auth)
         let url = self.config.gerrit_base_url()?.to_string();
         let root = self.git.root()?;
-        let (username, password) =
-            subprocess::git_credential_fill(&url, &root).context("acquiring credentials")?;
+        let (username, password) = subprocess::git_credential_fill(&url, &root)
+            .context("acquiring credentials")?
+            .ok_or_else(|| {
+                anyhow::anyhow!("git credential helper did not return username/password")
+            })?;
         self.set_credentials(
             username,
             password,
@@ -147,7 +156,11 @@ impl App {
         self.credential_source = Some(source);
         // Re-create client with auth prefix
         let base_url = self.config.gerrit_base_url()?;
-        self.gerrit = GerritClient::new(base_url, self.gerrit.credentials().cloned())?;
+        self.gerrit = GerritClient::new(
+            base_url,
+            self.gerrit.credentials().cloned(),
+            self.config.ssl_verify,
+        )?;
         Ok(())
     }
 
