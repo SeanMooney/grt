@@ -10,8 +10,10 @@ use tracing::debug;
 use grt::app::App;
 use grt::comments;
 use grt::config::CliOverrides;
+use grt::export::{self, ExportArgs};
 use grt::hook;
 use grt::push::{self, PushOptions};
+use grt::review::ReviewArgs;
 use grt::subprocess;
 
 /// grt — CLI/TUI tool for Git and Gerrit workflows
@@ -40,6 +42,9 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Push changes to Gerrit for review (git-review compatible)
+    Review(ReviewArgs),
+
     /// Push changes to Gerrit for review
     Push(PushArgs),
 
@@ -49,8 +54,35 @@ enum Commands {
     /// Set up current repo for Gerrit (hook, remote, connectivity)
     Setup(SetupArgs),
 
+    /// Export grt functionality (e.g., create git-review symlink)
+    Export(ExportArgs),
+
     /// Show grt and Gerrit server versions
     Version,
+}
+
+/// git-review compatible CLI — used when invoked as `git-review` via argv[0].
+#[derive(Parser, Debug)]
+#[command(
+    name = "git-review",
+    version,
+    about = "Push changes to Gerrit for review"
+)]
+struct GitReviewCli {
+    /// Increase verbosity (-v, -vv, -vvv)
+    #[arg(short = 'v', long, action = clap::ArgAction::Count)]
+    verbose: u8,
+
+    /// Colorize output
+    #[arg(long, value_name = "WHEN")]
+    color: Option<String>,
+
+    /// Disable colored output
+    #[arg(long)]
+    no_color: bool,
+
+    #[command(flatten)]
+    review: ReviewArgs,
 }
 
 #[derive(Parser, Debug)]
@@ -162,6 +194,28 @@ enum OutputFormat {
     Json,
 }
 
+/// CLI personality based on argv[0].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Personality {
+    /// Normal `grt` invocation with subcommands.
+    Grt,
+    /// Busybox-style `git-review` invocation with flat flags.
+    GitReview,
+}
+
+/// Detect CLI personality from argv[0].
+fn detect_personality(argv0: &str) -> Personality {
+    let basename = Path::new(argv0)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if basename == "git-review" {
+        Personality::GitReview
+    } else {
+        Personality::Grt
+    }
+}
+
 fn init_tracing(verbosity: u8) {
     let level = match verbosity {
         0 => "warn",
@@ -183,21 +237,97 @@ fn init_tracing(verbosity: u8) {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let argv0 = std::env::args().next().unwrap_or_default();
+    let personality = detect_personality(&argv0);
 
-    init_tracing(cli.verbose);
+    match personality {
+        Personality::GitReview => {
+            let cli = GitReviewCli::parse();
+            init_tracing(cli.verbose);
 
-    let work_dir = cli
-        .directory
-        .unwrap_or_else(|| std::env::current_dir().expect("cannot determine current directory"));
+            let work_dir = std::env::current_dir().expect("cannot determine current directory");
+            cmd_review(&work_dir, cli.review, false).await
+        }
+        Personality::Grt => {
+            let cli = Cli::parse();
+            init_tracing(cli.verbose);
 
-    let insecure = cli.insecure;
-    match cli.command {
-        Commands::Push(args) => cmd_push(&work_dir, args, insecure).await,
-        Commands::Comments(args) => cmd_comments(&work_dir, args, insecure).await,
-        Commands::Setup(args) => cmd_setup(&work_dir, args, insecure).await,
-        Commands::Version => cmd_version(&work_dir).await,
+            let work_dir = cli.directory.unwrap_or_else(|| {
+                std::env::current_dir().expect("cannot determine current directory")
+            });
+
+            let insecure = cli.insecure;
+            match cli.command {
+                Commands::Review(args) => cmd_review(&work_dir, args, insecure).await,
+                Commands::Push(args) => cmd_push(&work_dir, args, insecure).await,
+                Commands::Comments(args) => cmd_comments(&work_dir, args, insecure).await,
+                Commands::Setup(args) => cmd_setup(&work_dir, args, insecure).await,
+                Commands::Export(args) => export::cmd_export(&args),
+                Commands::Version => cmd_version(&work_dir).await,
+            }
+        }
     }
+}
+
+/// Dispatch `grt review` / `git-review` based on which mode flag is set.
+async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result<()> {
+    // Setup mode
+    if args.setup {
+        return cmd_setup(
+            work_dir,
+            SetupArgs {
+                remote: args.remote,
+                force_hook: false,
+            },
+            insecure,
+        )
+        .await;
+    }
+
+    // Modes not yet implemented (Batch 2+)
+    if args.download.is_some() {
+        anyhow::bail!("download mode (-d) is not yet implemented");
+    }
+    if args.cherrypick.is_some() {
+        anyhow::bail!("cherrypick mode (-x) is not yet implemented");
+    }
+    if args.cherrypickindicate.is_some() {
+        anyhow::bail!("cherrypickindicate mode (-X) is not yet implemented");
+    }
+    if args.cherrypickonly.is_some() {
+        anyhow::bail!("cherrypickonly mode (-N) is not yet implemented");
+    }
+    if args.compare.is_some() {
+        anyhow::bail!("compare mode (-m) is not yet implemented");
+    }
+    if args.list > 0 {
+        anyhow::bail!("list mode (-l) is not yet implemented");
+    }
+
+    // Default mode: push
+    cmd_push(
+        work_dir,
+        PushArgs {
+            branch: args.branch,
+            remote: args.remote,
+            topic: if args.no_topic { None } else { args.topic },
+            wip: args.wip,
+            ready: args.ready,
+            private: args.private,
+            remove_private: args.remove_private,
+            reviewers: args.reviewers,
+            cc: args.cc,
+            hashtags: args.hashtags,
+            message: args.message,
+            notify: args.notify,
+            no_rebase: args.no_rebase,
+            dry_run: args.dry_run,
+            yes: args.yes,
+            new_changeid: args.new_changeid,
+        },
+        insecure,
+    )
+    .await
 }
 
 async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()> {
@@ -442,6 +572,14 @@ mod tests {
     }
 
     #[test]
+    fn verify_git_review_cli() {
+        use clap::CommandFactory;
+        GitReviewCli::command().debug_assert();
+    }
+
+    // === Existing push/comments/setup/version tests ===
+
+    #[test]
     fn parse_push_defaults() {
         let cli = Cli::parse_from(["grt", "push"]);
         assert!(matches!(cli.command, Commands::Push(_)));
@@ -509,5 +647,164 @@ mod tests {
     fn parse_global_directory() {
         let cli = Cli::parse_from(["grt", "-C", "/tmp", "version"]);
         assert_eq!(cli.directory, Some(PathBuf::from("/tmp")));
+    }
+
+    // === New: review subcommand tests ===
+
+    #[test]
+    fn parse_review_subcommand() {
+        let cli = Cli::parse_from(["grt", "review", "main"]);
+        if let Commands::Review(args) = cli.command {
+            assert_eq!(args.branch.as_deref(), Some("main"));
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    #[test]
+    fn parse_review_with_download() {
+        let cli = Cli::parse_from(["grt", "review", "-d", "12345"]);
+        if let Commands::Review(args) = cli.command {
+            assert_eq!(args.download.as_deref(), Some("12345"));
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    #[test]
+    fn parse_review_with_setup() {
+        let cli = Cli::parse_from(["grt", "review", "-s"]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.setup);
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    #[test]
+    fn parse_review_push_mode_flags() {
+        let cli = Cli::parse_from([
+            "grt", "review", "-w", "-t", "my-topic", "-r", "origin", "main",
+        ]);
+        if let Commands::Review(args) = cli.command {
+            assert!(args.wip);
+            assert_eq!(args.topic.as_deref(), Some("my-topic"));
+            assert_eq!(args.remote.as_deref(), Some("origin"));
+            assert_eq!(args.branch.as_deref(), Some("main"));
+        } else {
+            panic!("expected Review command");
+        }
+    }
+
+    #[test]
+    fn parse_review_no_args() {
+        let cli = Cli::parse_from(["grt", "review"]);
+        assert!(matches!(cli.command, Commands::Review(_)));
+    }
+
+    // === New: export subcommand tests ===
+
+    #[test]
+    fn parse_export_git_review() {
+        let cli = Cli::parse_from(["grt", "export", "git-review"]);
+        if let Commands::Export(args) = cli.command {
+            assert!(matches!(
+                args.target,
+                export::ExportTarget::GitReview { clean: false }
+            ));
+        } else {
+            panic!("expected Export command");
+        }
+    }
+
+    #[test]
+    fn parse_export_git_review_clean() {
+        let cli = Cli::parse_from(["grt", "export", "git-review", "--clean"]);
+        if let Commands::Export(args) = cli.command {
+            assert!(matches!(
+                args.target,
+                export::ExportTarget::GitReview { clean: true }
+            ));
+        } else {
+            panic!("expected Export command");
+        }
+    }
+
+    // === New: argv[0] personality detection tests ===
+
+    #[test]
+    fn detect_personality_grt_bare() {
+        assert_eq!(detect_personality("grt"), Personality::Grt);
+    }
+
+    #[test]
+    fn detect_personality_grt_absolute() {
+        assert_eq!(detect_personality("/usr/bin/grt"), Personality::Grt);
+    }
+
+    #[test]
+    fn detect_personality_git_review_bare() {
+        assert_eq!(detect_personality("git-review"), Personality::GitReview);
+    }
+
+    #[test]
+    fn detect_personality_git_review_absolute() {
+        assert_eq!(
+            detect_personality("/usr/local/bin/git-review"),
+            Personality::GitReview
+        );
+    }
+
+    #[test]
+    fn detect_personality_git_review_home_local() {
+        assert_eq!(
+            detect_personality("/home/user/.local/bin/git-review"),
+            Personality::GitReview
+        );
+    }
+
+    #[test]
+    fn detect_personality_unknown_defaults_to_grt() {
+        assert_eq!(detect_personality("something-else"), Personality::Grt);
+    }
+
+    // === New: git-review mode parsing tests ===
+
+    #[test]
+    fn git_review_parse_branch() {
+        let cli = GitReviewCli::parse_from(["git-review", "main"]);
+        assert_eq!(cli.review.branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn git_review_parse_download() {
+        let cli = GitReviewCli::parse_from(["git-review", "-d", "12345"]);
+        assert_eq!(cli.review.download.as_deref(), Some("12345"));
+    }
+
+    #[test]
+    fn git_review_parse_verbose() {
+        let cli = GitReviewCli::parse_from(["git-review", "-v", "-d", "12345"]);
+        assert_eq!(cli.verbose, 1);
+        assert_eq!(cli.review.download.as_deref(), Some("12345"));
+    }
+
+    #[test]
+    fn git_review_parse_no_color() {
+        let cli = GitReviewCli::parse_from(["git-review", "--no-color", "main"]);
+        assert!(cli.no_color);
+        assert_eq!(cli.review.branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn git_review_parse_list() {
+        let cli = GitReviewCli::parse_from(["git-review", "-l"]);
+        assert_eq!(cli.review.list, 1);
+    }
+
+    #[test]
+    fn git_review_parse_setup() {
+        let cli = GitReviewCli::parse_from(["git-review", "-s"]);
+        assert!(cli.review.setup);
     }
 }
