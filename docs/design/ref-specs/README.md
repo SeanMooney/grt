@@ -10,10 +10,10 @@ Console UI for Gerrit written in Python (urwid + SQLAlchemy + SQLite). The most 
 
 | Spec | What It Covers | Status |
 |------|---------------|--------|
-| `gertty-data-model.md` | SQLAlchemy schema: 18+ tables, relationships, indices, migrations | Stub |
-| `gertty-sync-system.md` | Priority queue, 30+ task types, offline handling, conflict resolution | Stub |
-| `gertty-search-language.md` | Tokenizer, parser grammar, query semantics, operator mapping | Stub |
-| `gertty-config-and-ui.md` | YAML config, views, navigation model, keybindings, themes | Stub |
+| `gertty-data-model.md` | SQLAlchemy schema: 18+ tables, relationships, indices, migrations | Complete |
+| `gertty-sync-system.md` | Priority queue, 30+ task types, offline handling, conflict resolution | Complete |
+| `gertty-search-language.md` | Tokenizer, parser grammar, query semantics, operator mapping | Complete |
+| `gertty-config-and-ui.md` | YAML config, views, navigation model, keybindings, themes | Complete |
 
 **Source code:** `ref/gertty/`
 
@@ -23,8 +23,8 @@ CLI tool for submitting Git branches to Gerrit. Primary reference for the push w
 
 | Spec | What It Covers | Status |
 |------|---------------|--------|
-| `git-review-workflow.md` | Push workflow, Change-Id hooks, rebase handling, config layers | Stub |
-| `git-review-gerrit-api.md` | SSH + HTTP protocols, auth methods, API version handling | Stub |
+| `git-review-workflow.md` | Push workflow, Change-Id hooks, rebase handling, config layers | Complete |
+| `git-review-gerrit-api.md` | SSH + HTTP protocols, auth methods, API version handling | Complete |
 
 **Source code:** `ref/git-review/`
 
@@ -34,7 +34,7 @@ Python git analysis tool. Reference for async patterns, manager architecture, an
 
 | Spec | What It Covers | Status |
 |------|---------------|--------|
-| `ca-bhfuil-patterns.md` | Manager pattern, async task management, CLI/library separation | Stub |
+| `ca-bhfuil-patterns.md` | Manager pattern, async task management, CLI/library separation | Complete |
 
 **Source code:** `ref/ca-bhfuil/` (has its own CLAUDE.md and extensive docs)
 

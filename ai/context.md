@@ -27,16 +27,17 @@ grt is not a 1:1 port of any of these. It takes the best ideas from each and red
 | Logging | tracing | Structured logging with spans |
 | Errors | anyhow | Ergonomic error propagation |
 
-See `tech-stack.md` for full details on each choice.
+See `docs/design/tech-stack.md` for full details on each choice.
 
 ## Repository Layout
 
 ```
 grt/
 ├── AGENTS.md              # AI agent guide (CLAUDE.md symlinks here)
-├── tech-stack.md           # Technology selections and architecture
 ├── manifest.toon           # Document manifest for agentic RAG
 ├── docs/design/            # Design documentation
+│   ├── tech-stack.md       # Technology selections and architecture
+│   ├── architecture.md     # System design, module boundaries, data flow
 │   ├── ref-specs/          # Reverse-engineered reference project specs
 │   ├── decisions/          # Architecture Decision Records
 │   └── *.md                # grt design documents
@@ -59,5 +60,4 @@ Located in `ref/` (gitignored). These are the Python projects grt draws from:
 
 ## Current Phase
 
-Documentation scaffolding — building the knowledge base that will guide implementation.
-Next phase: populating ref-specs by analyzing the reference projects.
+Ref-specs complete, architecture drafted — ready to populate design docs and begin implementation.

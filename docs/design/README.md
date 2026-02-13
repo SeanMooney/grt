@@ -7,15 +7,15 @@ Navigation hub for all design documentation. Start here to find what you need.
 | Path | Purpose | Status |
 |------|---------|--------|
 | **Reference Specs** | | |
-| `ref-specs/gertty-data-model.md` | Gertty SQLAlchemy schema: 18+ tables, relationships, indices | Stub |
-| `ref-specs/gertty-sync-system.md` | Gertty sync: priority queue, 30+ task types, offline handling | Stub |
-| `ref-specs/gertty-search-language.md` | Gertty search: tokenizer, parser, query semantics | Stub |
-| `ref-specs/gertty-config-and-ui.md` | Gertty config, views, navigation, keybindings | Stub |
-| `ref-specs/git-review-workflow.md` | git-review push workflow, hooks, rebase, config layers | Stub |
-| `ref-specs/git-review-gerrit-api.md` | git-review Gerrit protocols: SSH + HTTP, auth methods | Stub |
-| `ref-specs/ca-bhfuil-patterns.md` | ca-bhfuil manager pattern, async, CLI separation | Stub |
+| `ref-specs/gertty-data-model.md` | Gertty SQLAlchemy schema: 18+ tables, relationships, indices | Complete |
+| `ref-specs/gertty-sync-system.md` | Gertty sync: priority queue, 30+ task types, offline handling | Complete |
+| `ref-specs/gertty-search-language.md` | Gertty search: tokenizer, parser, query semantics | Complete |
+| `ref-specs/gertty-config-and-ui.md` | Gertty config, views, navigation, keybindings | Complete |
+| `ref-specs/git-review-workflow.md` | git-review push workflow, hooks, rebase, config layers | Complete |
+| `ref-specs/git-review-gerrit-api.md` | git-review Gerrit protocols: SSH + HTTP, auth methods | Complete |
+| `ref-specs/ca-bhfuil-patterns.md` | ca-bhfuil manager pattern, async, CLI separation | Complete |
 | **Design Docs** | | |
-| `architecture.md` | grt system design, module boundaries, data flow | Stub |
+| `architecture.md` | grt system design, module boundaries, data flow | Draft |
 | `data-model.md` | Unified SQLite schema (from gertty + extensions) | Stub |
 | `gerrit-client.md` | REST API client, auth, sync endpoints | Stub |
 | `cli-design.md` | clap command tree, flags, output formats | Stub |

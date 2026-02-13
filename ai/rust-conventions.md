@@ -1,6 +1,6 @@
 # Rust Conventions for grt
 
-Single source of truth for coding standards. Derived from tech-stack.md selections.
+Single source of truth for coding standards. Derived from `docs/design/tech-stack.md` selections.
 
 ## Error Handling
 
