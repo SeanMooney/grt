@@ -1,0 +1,4 @@
+[workspace]
+shared-version   = true
+tag-name         = "v{{version}}"
+pre-release-hook = ["just", "pre-release-checks"]
