@@ -37,6 +37,11 @@ pre-release-checks:
     cargo deny check
     cargo test --workspace
 
+# Install pre-commit hooks (run once after clone)
+setup-hooks:
+    pre-commit install
+    pre-commit install --hook-type commit-msg
+
 # Remove build artifacts
 clean:
     cargo clean

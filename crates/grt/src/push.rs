@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2026 grt contributors
+
 use anyhow::{Context, Result};
 
 /// Options for building a Gerrit push refspec.

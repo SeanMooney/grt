@@ -31,6 +31,25 @@ just lint                # fmt + clippy + deny
 nix develop              # Enter dev shell with all tools
 ```
 
+## Commit Requirements
+
+### DCO Sign-off
+
+Every commit must include a `Signed-off-by` trailer. When creating commits, always
+use the `-s` flag or include the trailer manually. This is enforced by a commit-msg
+hook.
+
+### SPDX Headers
+
+Every `.rs` file must start with:
+
+```rust
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2026 grt contributors
+```
+
+Do not modify the header on `crates/grt/resources/commit-msg` (vendored Gerrit file).
+
 ## Knowledge Base Navigation
 
 All project knowledge lives in documentation files. Use `manifest.toon` to find them — don't scan the filesystem.

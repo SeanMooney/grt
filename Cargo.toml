@@ -9,7 +9,7 @@ name = "grt"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.85.0"
-license = "MIT"
+license = "Apache-2.0 OR MIT"
 repository = "https://github.com/smooney/grt"
 description = "CLI/TUI tool for Git and Gerrit workflows"
 

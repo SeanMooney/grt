@@ -1,0 +1,48 @@
+repos:
+  # General file hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-toml
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  # SPDX license header check (auto-inserts if missing)
+  - repo: https://github.com/Lucas-C/pre-commit-hooks
+    rev: v1.5.6
+    hooks:
+      - id: insert-license
+        name: SPDX header check (.rs)
+        files: \.rs$
+        args:
+          - --license-filepath
+          - .license-header.txt
+          - --comment-style
+          - //
+          - --no-extra-eol
+
+  # Rust formatting and linting
+  - repo: https://github.com/AndrejOrsula/pre-commit-cargo
+    rev: 0.5.0
+    hooks:
+      - id: cargo-fmt
+        args: [--all, --, --check]
+      - id: cargo-clippy
+        args: [--workspace, --all-targets, --, -D, warnings]
+
+  # DCO sign-off validation (local — no external dependency)
+  - repo: local
+    hooks:
+      - id: dco-signoff
+        name: DCO sign-off check
+        language: system
+        entry: "sh -c 'grep -q \"^Signed-off-by: \" \"$1\" || { echo \"ERROR: Missing Signed-off-by trailer. Use git commit -s\"; exit 1; }' --"
+        stages: [commit-msg]
+
+default_stages: [pre-commit]
+fail_fast: false

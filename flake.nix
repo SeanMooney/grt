@@ -58,6 +58,7 @@
             cargo-deny
             cargo-nextest
             just
+            pre-commit
           ];
         };
       });

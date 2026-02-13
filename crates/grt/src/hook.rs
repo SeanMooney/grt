@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright (c) 2026 grt contributors
+
 use std::path::Path;
 
 use anyhow::{Context, Result};
