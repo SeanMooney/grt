@@ -1,6 +1,6 @@
-phase: MVP implementation complete
+phase: Post-MVP documentation
 
-completed[7]{task,detail}:
+completed[8]{task,detail}:
   Phase 0: Infrastructure,Added workspace deps envrc gitignore; upgraded Rust 1.82->1.85 for edition2024 transitive deps
   Phase 1: Config + Git Repo,config.rs (.gitreview INI parser layered config) git.rs (gix wrapper for repo discovery HEAD config hooks)
   Phase 2: Gerrit REST Client,gerrit.rs (reqwest client XSSI stripping serde types all endpoints) with mockito integration tests
@@ -8,12 +8,13 @@ completed[7]{task,detail}:
   Phase 4: Comment Retrieval,comments.rs (thread resolution algorithm LLM-optimized text output structured JSON output)
   Phase 5: CLI Wiring,main.rs (clap derive command tree) app.rs (App struct wiring config+git+gerrit)
   Phase 6: End-to-End & Polish,Fixed clippy warnings cargo-deny issues (MPL-2.0 Zlib CDLA-Permissive-2.0 licenses gix 0.70->0.79 security advisory work_dir deprecation)
+  Phase 7: Design Doc Population,Populated 5 stub design docs (gerrit-client cli-design config-system git-operations error-handling) from source code and ref-specs
 
 in_progress: Nothing
 
 next_steps[4]:
   Manual testing against a real Gerrit instance (setup push comments version)
-  Populate design doc stubs using completed ref-specs (see traceability matrix in docs/design/README.md)
+  Populate remaining 4 stub design docs (data-model tui-design search-engine sync-engine) — these cover unimplemented features
   Create ADRs for key design decisions as they emerge
   Begin TUI and SQLite work (post-MVP)
 
@@ -22,7 +23,7 @@ decisions_pending[0]:
 test_status: 75 tests passing (58 lib + 9 main + 8 integration)
 lint_status: cargo fmt clippy deny all pass clean
 
-handoff_notes[10]:
+handoff_notes[12]:
   MVP CLI is fully implemented: push comments setup version commands
   75 tests all passing (58 lib unit + 9 main unit + 8 mockito integration)
   cargo fmt --check passes
@@ -33,3 +34,5 @@ handoff_notes[10]:
   Rust toolchain 1.85.0 (upgraded from 1.82.0 for edition2024 transitive deps)
   All cargo commands must run via nix develop shell (not rustup)
   Source tree: lib.rs app.rs config.rs gerrit.rs git.rs push.rs comments.rs hook.rs subprocess.rs + resources/commit-msg
+  5 design docs populated from stub to draft: gerrit-client cli-design config-system git-operations error-handling
+  4 design docs remain as stubs: data-model tui-design search-engine sync-engine (these cover unimplemented features)

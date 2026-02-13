@@ -23,12 +23,12 @@ docs[29]{path,type,status,topics,summary}:
   docs/design/draft/architecture.md,design,draft,modules data-flow concurrency,grt system architecture and module boundaries
   docs/design/draft/build-and-release.md,design,draft,nix zuul cross-compile sbom cosign,Build packaging CI release and supply chain strategy
   docs/design/draft/data-model.md,design,stub,sqlite schema migrations,Unified SQLite schema from gertty plus extensions
-  docs/design/draft/gerrit-client.md,design,stub,rest-api auth reqwest,REST API client auth and sync endpoints
-  docs/design/draft/cli-design.md,design,stub,clap commands flags output,clap command tree flags and output formats
+  docs/design/draft/gerrit-client.md,design,draft,rest-api auth reqwest xssi,REST API client auth endpoints XSSI stripping and connection management
+  docs/design/draft/cli-design.md,design,draft,clap commands flags output,clap command tree flags output formats and interactive behavior
   docs/design/draft/tui-design.md,design,stub,ratatui views events rendering,ratatui views navigation and event loop
   docs/design/draft/search-engine.md,design,stub,nucleo query fuzzy,Query language plus fuzzy search design
-  docs/design/draft/config-system.md,design,stub,toml config multi-server,TOML config layered config and multi-server
-  docs/design/draft/git-operations.md,design,stub,gix notedb hooks cherry-pick,gix operations NoteDb reading and hook management
+  docs/design/draft/config-system.md,design,draft,toml ini credentials layered,Four-tier layered config credentials and platform paths
+  docs/design/draft/git-operations.md,design,draft,gix subprocess hooks push,gix reads subprocess writes hook management and push workflow
   docs/design/draft/sync-engine.md,design,stub,async sync offline scheduling,Async sync task scheduling and offline mode
-  docs/design/draft/error-handling.md,design,stub,anyhow errors recovery,Error types recovery and user-facing messages
+  docs/design/draft/error-handling.md,design,draft,anyhow context tracing,anyhow error strategy context propagation and logging
   docs/design/decisions/README.md,guide,complete,adr decisions,ADR index and template
