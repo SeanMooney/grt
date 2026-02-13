@@ -4,13 +4,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use tracing::debug;
 
 use grt::app::App;
 use grt::comments;
 use grt::config::CliOverrides;
 use grt::export::{self, ExportArgs};
+use grt::gerrit::GerritError;
 use grt::hook;
 use grt::push::{self, PushOptions};
 use grt::review::{self, ReviewArgs};
@@ -59,6 +60,13 @@ enum Commands {
 
     /// Show grt and Gerrit server versions
     Version,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 /// git-review compatible CLI — used when invoked as `git-review` via argv[0].
@@ -235,12 +243,44 @@ fn init_tracing(verbosity: u8) {
         .init();
 }
 
+/// Map an error to an exit code for git-review compatibility.
+fn exit_code_for_error(err: &anyhow::Error) -> i32 {
+    // Check for GerritError in the error chain
+    if let Some(gerrit_err) = err.downcast_ref::<GerritError>() {
+        return match gerrit_err {
+            GerritError::AuthFailed { .. } => 1,
+            GerritError::NotFound => 1,
+            GerritError::ServerError { .. } => 1,
+            GerritError::Network(_) => 40,
+        };
+    }
+
+    // Check for common error patterns in the message
+    let msg = format!("{err:#}");
+    if msg.contains("git config") || msg.contains("no Gerrit host configured") {
+        return 128;
+    }
+    if msg.contains("argument") || msg.contains("CHANGE,PS") || msg.contains("malformed") {
+        return 3;
+    }
+    if msg.contains("hook") {
+        return 2;
+    }
+
+    1 // generic error
+}
+
+fn cmd_completions(shell: clap_complete::Shell) {
+    let mut cmd = Cli::command();
+    clap_complete::generate(shell, &mut cmd, "grt", &mut std::io::stdout());
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let argv0 = std::env::args().next().unwrap_or_default();
     let personality = detect_personality(&argv0);
 
-    match personality {
+    let result = match personality {
         Personality::GitReview => {
             let cli = GitReviewCli::parse();
             init_tracing(cli.verbose);
@@ -264,8 +304,17 @@ async fn main() -> Result<()> {
                 Commands::Setup(args) => cmd_setup(&work_dir, args, insecure).await,
                 Commands::Export(args) => export::cmd_export(&args),
                 Commands::Version => cmd_version(&work_dir).await,
+                Commands::Completions { shell } => {
+                    cmd_completions(shell);
+                    Ok(())
+                }
             }
         }
+    };
+
+    if let Err(err) = result {
+        eprintln!("error: {err:#}");
+        std::process::exit(exit_code_for_error(&err));
     }
 }
 
@@ -925,5 +974,72 @@ mod tests {
     fn git_review_parse_setup() {
         let cli = GitReviewCli::parse_from(["git-review", "-s"]);
         assert!(cli.review.setup);
+    }
+
+    // === Completions subcommand ===
+
+    #[test]
+    fn parse_completions_bash() {
+        let cli = Cli::parse_from(["grt", "completions", "bash"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Completions {
+                shell: clap_complete::Shell::Bash
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_completions_zsh() {
+        let cli = Cli::parse_from(["grt", "completions", "zsh"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Completions {
+                shell: clap_complete::Shell::Zsh
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_completions_fish() {
+        let cli = Cli::parse_from(["grt", "completions", "fish"]);
+        assert!(matches!(
+            cli.command,
+            Commands::Completions {
+                shell: clap_complete::Shell::Fish
+            }
+        ));
+    }
+
+    // === Exit code mapping ===
+
+    #[test]
+    fn exit_code_network_error() {
+        let err: anyhow::Error = GerritError::Network("connection refused".into()).into();
+        assert_eq!(exit_code_for_error(&err), 40);
+    }
+
+    #[test]
+    fn exit_code_auth_error() {
+        let err: anyhow::Error = GerritError::AuthFailed { status: 401 }.into();
+        assert_eq!(exit_code_for_error(&err), 1);
+    }
+
+    #[test]
+    fn exit_code_generic() {
+        let err = anyhow::anyhow!("something went wrong");
+        assert_eq!(exit_code_for_error(&err), 1);
+    }
+
+    #[test]
+    fn exit_code_config_error() {
+        let err = anyhow::anyhow!("no Gerrit host configured");
+        assert_eq!(exit_code_for_error(&err), 128);
+    }
+
+    #[test]
+    fn exit_code_malformed_input() {
+        let err = anyhow::anyhow!("compare argument must be CHANGE,PS[-PS]");
+        assert_eq!(exit_code_for_error(&err), 3);
     }
 }

@@ -7,10 +7,39 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use serde::Deserialize;
+use tracing::warn;
 use url::Url;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_RETRIES: u32 = 3;
+
+/// Typed errors from the Gerrit REST API.
+#[derive(Debug, thiserror::Error)]
+pub enum GerritError {
+    #[error("authentication failed (HTTP {status})")]
+    AuthFailed { status: u16 },
+
+    #[error("not found (HTTP 404)")]
+    NotFound,
+
+    #[error("server error (HTTP {status}): {body}")]
+    ServerError { status: u16, body: String },
+
+    #[error("network error: {0}")]
+    Network(String),
+}
+
+impl GerritError {
+    /// Whether this error is transient and worth retrying.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            GerritError::ServerError { status, .. } => *status >= 500,
+            GerritError::Network(_) => true,
+            _ => false,
+        }
+    }
+}
 
 /// Type of HTTP authentication to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -102,25 +131,66 @@ impl GerritClient {
         headers
     }
 
-    /// Perform a GET request and return the response body with XSSI prefix stripped.
-    async fn get(&self, path: &str) -> Result<String> {
-        let url = self.api_url(path)?;
+    /// Perform a single GET request returning a typed error.
+    async fn get_once(&self, url: &Url) -> std::result::Result<String, GerritError> {
         let resp = self
             .client
             .get(url.clone())
             .headers(self.auth_headers())
             .send()
             .await
-            .context("sending request")?;
+            .map_err(|e| GerritError::Network(e.to_string()))?;
 
-        let status = resp.status();
-        if !status.is_success() {
+        let status = resp.status().as_u16();
+        if status == 401 || status == 403 {
+            return Err(GerritError::AuthFailed { status });
+        }
+        if status == 404 {
+            return Err(GerritError::NotFound);
+        }
+        if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Gerrit API error ({}): {}", status, body);
+            return Err(GerritError::ServerError { status, body });
         }
 
-        let body = resp.text().await.context("reading response body")?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| GerritError::Network(e.to_string()))?;
         Ok(strip_xssi_prefix(&body))
+    }
+
+    /// Perform a GET request with retry on transient errors.
+    ///
+    /// Retries up to 3 times with exponential backoff (1s, 2s, 4s) on
+    /// 5xx server errors and network failures. Does not retry on 4xx.
+    async fn get(&self, path: &str) -> Result<String> {
+        let url = self.api_url(path)?;
+        let mut last_err = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            match self.get_once(&url).await {
+                Ok(body) => return Ok(body),
+                Err(e) if e.is_retryable() && attempt < MAX_RETRIES => {
+                    let delay = Duration::from_secs(1 << attempt);
+                    warn!(
+                        "request to {} failed (attempt {}/{}): {}, retrying in {}s",
+                        path,
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                        e,
+                        delay.as_secs()
+                    );
+                    tokio::time::sleep(delay).await;
+                    last_err = Some(e);
+                }
+                Err(e) => {
+                    return Err(e).context(format!("Gerrit API request to {path}"));
+                }
+            }
+        }
+
+        Err(last_err.unwrap()).context(format!("Gerrit API request to {path} (exhausted retries)"))
     }
 
     /// Get the Gerrit server version.
@@ -536,5 +606,50 @@ mod tests {
     #[test]
     fn auth_type_default_is_basic() {
         assert_eq!(AuthType::default(), AuthType::Basic);
+    }
+
+    #[test]
+    fn gerrit_error_retryable_server_5xx() {
+        let err = GerritError::ServerError {
+            status: 500,
+            body: "internal".into(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn gerrit_error_retryable_503() {
+        let err = GerritError::ServerError {
+            status: 503,
+            body: "unavailable".into(),
+        };
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn gerrit_error_retryable_network() {
+        let err = GerritError::Network("connection reset".into());
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn gerrit_error_not_retryable_auth() {
+        let err = GerritError::AuthFailed { status: 401 };
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn gerrit_error_not_retryable_404() {
+        let err = GerritError::NotFound;
+        assert!(!err.is_retryable());
+    }
+
+    #[test]
+    fn gerrit_error_not_retryable_4xx() {
+        let err = GerritError::ServerError {
+            status: 400,
+            body: "bad request".into(),
+        };
+        assert!(!err.is_retryable());
     }
 }
