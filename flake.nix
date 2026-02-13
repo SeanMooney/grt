@@ -55,6 +55,7 @@
           inputsFrom = [ grt ];
           packages = with pkgs; [
             toolchain
+            cargo-deny
             cargo-nextest
             just
           ];
