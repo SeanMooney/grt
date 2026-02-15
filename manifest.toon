@@ -1,6 +1,6 @@
 project: grt
 version: 0.1.0
-phase: git-review parity complete
+phase: git-review port complete
 
 docs[41]{path,type,status,topics,summary}:
   README.md,guide,complete,overview quickstart install claude-code,Project overview quickstart and Claude Code integration

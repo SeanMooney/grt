@@ -176,6 +176,10 @@ struct PushArgs {
     #[arg(long)]
     no_thin: bool,
 
+    /// Color for git push (e.g. always, never, auto). Set by caller, not CLI.
+    #[arg(skip)]
+    pub color_remote: Option<String>,
+
     /// Output format
     #[arg(long, value_enum, default_value = "text")]
     format: OutputFormat,
@@ -295,6 +299,17 @@ fn cmd_completions(shell: clap_complete::Shell) {
     clap_complete::generate(shell, &mut cmd, "grt", &mut std::io::stdout());
 }
 
+/// Resolve color.remote value from CLI flags.
+fn resolve_color_remote(no_color: bool, color: Option<&str>) -> String {
+    if no_color {
+        return "never".to_string();
+    }
+    match color {
+        Some("always") | Some("never") | Some("auto") => color.unwrap().to_string(),
+        _ => "always".to_string(),
+    }
+}
+
 /// Check if the configured remote exists, and create it if possible.
 ///
 /// - If remote exists with a tracking branch: no-op
@@ -349,19 +364,14 @@ async fn main() {
             let cli = GitReviewCli::parse();
             init_tracing(cli.verbose);
 
-            if cli.color.is_some() {
-                tracing::warn!("--color is not yet implemented");
-            }
-            if cli.no_color {
-                tracing::warn!("--no-color is not yet implemented");
-            }
             if cli.license {
                 println!("Licensed under Apache-2.0 OR MIT");
                 return;
             }
 
             let work_dir = std::env::current_dir().expect("cannot determine current directory");
-            cmd_review(&work_dir, cli.review, false).await
+            let color = resolve_color_remote(cli.no_color, cli.color.as_deref());
+            cmd_review(&work_dir, cli.review, false, Some(color)).await
         }
         Personality::Grt => {
             let cli = Cli::parse();
@@ -372,9 +382,14 @@ async fn main() {
             });
 
             let insecure = cli.insecure;
+            let color = resolve_color_remote(cli.no_color, None);
             match cli.command {
-                Commands::Review(args) => cmd_review(&work_dir, args, insecure).await,
-                Commands::Push(args) => cmd_push(&work_dir, args, insecure).await,
+                Commands::Review(args) => cmd_review(&work_dir, args, insecure, Some(color)).await,
+                Commands::Push(args) => {
+                    let mut push_args = args;
+                    push_args.color_remote = Some(color);
+                    cmd_push(&work_dir, push_args, insecure).await
+                }
                 Commands::Comments(args) => cmd_comments(&work_dir, args, insecure).await,
                 Commands::Setup(args) => cmd_setup(&work_dir, args, insecure).await,
                 Commands::Export(args) => export::cmd_export(&args),
@@ -394,7 +409,12 @@ async fn main() {
 }
 
 /// Dispatch `grt review` / `git-review` based on which mode flag is set.
-async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result<()> {
+async fn cmd_review(
+    work_dir: &Path,
+    args: ReviewArgs,
+    insecure: bool,
+    color_remote: Option<String>,
+) -> Result<()> {
     // Setup mode: run setup, but continue if --finish is also set
     if args.setup {
         cmd_setup(
@@ -419,6 +439,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
     // Create a single App instance for all mode dispatches
     let cli_overrides = CliOverrides {
         remote: args.remote.clone(),
+        use_pushurl: args.use_pushurl.then_some(true),
         insecure,
         ..Default::default()
     };
@@ -458,7 +479,15 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
 
     // Compare mode
     if let Some(ref compare_arg) = args.compare {
-        return review::cmd_review_compare(&mut app, compare_arg).await;
+        let compare_branch = branch.as_deref().unwrap_or(&app.config.branch).to_string();
+        return review::cmd_review_compare(
+            &mut app,
+            compare_arg,
+            &compare_branch,
+            args.no_rebase,
+            args.force_rebase,
+        )
+        .await;
     }
 
     // List mode
@@ -520,6 +549,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
             new_changeid: false, // already handled above
             no_thin: args.no_thin,
             format: args.format.clone(),
+            color_remote: color_remote.clone(),
         },
         insecure,
     )
@@ -637,15 +667,12 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
 
     let refspec = push::build_refspec(&opts)?;
 
+    let color_val = args.color_remote.as_deref().unwrap_or("always");
+    let color_config = format!("color.remote={}", color_val);
+
     // Dry-run: show full command with all flags (Task L13)
     if args.dry_run {
-        let mut dry_args: Vec<&str> = vec![
-            "git",
-            "-c",
-            "color.remote=always",
-            "push",
-            "--no-follow-tags",
-        ];
+        let mut dry_args: Vec<&str> = vec!["git", "-c", &color_config, "push", "--no-follow-tags"];
         if args.no_thin {
             dry_args.push("--no-thin");
         }
@@ -657,7 +684,7 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
 
     // Build push args with --no-follow-tags, color remote, and optional --no-thin
     // (Tasks M6, M7, L13, L15)
-    let mut push_args: Vec<&str> = vec!["-c", "color.remote=always", "push", "--no-follow-tags"];
+    let mut push_args: Vec<&str> = vec!["-c", &color_config, "push", "--no-follow-tags"];
     if args.no_thin {
         push_args.push("--no-thin");
     }

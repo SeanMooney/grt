@@ -4,7 +4,7 @@
 
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
-| — | _No decisions recorded yet_ | — | — |
+| [0001](0001-git-review-port-complete.md) | git-review port complete | Accepted | 2026-02-15 |
 
 Decisions will be recorded here as they arise during design and implementation.
 

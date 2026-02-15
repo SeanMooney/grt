@@ -62,8 +62,9 @@ pub struct ReviewArgs {
     #[arg(short = 'N', long, value_name = "CHANGE", group = "mode")]
     pub cherrypickonly: Option<String>,
 
-    /// Compare patchsets of a change
-    #[arg(short = 'm', long, value_name = "CHANGE,PS[-PS]", group = "mode")]
+    /// Compare patchsets of a change.
+    /// CHANGE: base vs latest. CHANGE,PS: PS vs latest. CHANGE,0-PS: base vs PS. CHANGE,PS-PS: PS vs PS.
+    #[arg(short = 'm', long, value_name = "CHANGE[,PS[-PS]]", group = "mode")]
     pub compare: Option<String>,
 
     /// List open changes (-l brief, -ll verbose)
@@ -486,16 +487,24 @@ pub async fn cmd_review_cherrypickonly(app: &mut App, change_arg: &str) -> Resul
     Ok(())
 }
 
-/// Parse a compare argument: `"CHANGE,PS[-PS]"`.
+/// Parse a compare argument: `"CHANGE[,PS[-PS]]"`.
 ///
-/// - `"12345,1-3"` → `("12345", 1, Some(3))`
-/// - `"12345,1"` → `("12345", 1, None)` (diff patchset against current revision)
+/// - `"12345"` → `("12345", None, None)` — bare change, latest vs base
+/// - `"12345,3"` → `("12345", Some(3), None)` — single PS vs latest
+/// - `"12345,3-5"` → `("12345", Some(3), Some(5))` — PS vs PS range
+/// - `"12345,0-3"` → `("12345", Some(0), Some(3))` — base vs PS (0 = base sentinel)
 ///
 /// Returns an error if the format is invalid.
-pub fn parse_compare_arg(input: &str) -> Result<(String, i32, Option<i32>)> {
-    let (change, ps_part) = input
-        .split_once(',')
-        .context("compare argument must be CHANGE,PS[-PS]")?;
+pub fn parse_compare_arg(input: &str) -> Result<(String, Option<i32>, Option<i32>)> {
+    let (change, ps_part) = match input.split_once(',') {
+        Some((c, p)) => (c, p),
+        None => {
+            if input.is_empty() {
+                anyhow::bail!("compare argument has empty change number");
+            }
+            return Ok((input.to_string(), None, None));
+        }
+    };
 
     if change.is_empty() {
         anyhow::bail!("compare argument has empty change number");
@@ -508,23 +517,31 @@ pub fn parse_compare_arg(input: &str) -> Result<(String, i32, Option<i32>)> {
         let to: i32 = to_str
             .parse()
             .context("invalid 'to' patchset number in compare argument")?;
-        Ok((change.to_string(), from, Some(to)))
+        Ok((change.to_string(), Some(from), Some(to)))
     } else {
         let from: i32 = ps_part
             .parse()
             .context("invalid patchset number in compare argument")?;
-        Ok((change.to_string(), from, None))
+        Ok((change.to_string(), Some(from), None))
     }
 }
 
-/// Compare two patchsets of a change by diffing their fetched refs.
+/// Compare patchsets of a change by diffing their fetched refs.
 ///
-/// When `ps_to` is `None`, diffs against the change's current revision.
-pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> {
-    // TODO: git-review supports rebasing in compare mode (cmd.py compare flow).
-    // Our implementation uses direct SHA-based diff which is simpler but doesn't
-    // support the rebase-based comparison workflow.
-    // TODO: git-review validates old_ps != new_ps. We skip this validation.
+/// Handles four forms:
+/// - `(None, None)`: bare change — latest vs base
+/// - `(Some(ps), None)`: single PS vs latest (git-review compat)
+/// - `(Some(0), Some(to))`: base vs PS (0 = base sentinel)
+/// - `(Some(from), Some(to))`: PS vs PS range
+pub async fn cmd_review_compare(
+    app: &mut App,
+    compare_arg: &str,
+    branch: &str,
+    no_rebase: bool,
+    force_rebase: bool,
+) -> Result<()> {
+    const OLD_BRANCH: &str = "grt-compare-old";
+    const NEW_BRANCH: &str = "grt-compare-new";
 
     // Normalize URL if provided
     let normalized = if compare_arg.starts_with("http") {
@@ -544,35 +561,175 @@ pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> 
         app.authenticate_and_verify().await?;
     }
 
-    debug!(
-        "comparing change {} patchset {} vs {:?}",
-        change_id, ps_from, ps_to
-    );
     let change =
         review_query::get_change_all_revisions(&remote_url, &change_id, &app.gerrit, &root).await?;
 
-    let (_, rev_from) = find_target_revision(&change, Some(ps_from))?;
-    let ref_from = rev_from
-        .git_ref
-        .as_deref()
-        .context("source revision has no ref")?
-        .to_string();
+    let orig_ref = subprocess::git_head_restore_ref(&root)?;
 
-    let (_, rev_to) = find_target_revision(&change, ps_to)?;
-    let ps_to_num = rev_to.number.unwrap_or(0);
-    let ref_to = rev_to
-        .git_ref
-        .as_deref()
-        .context("target revision has no ref")?
-        .to_string();
+    // Determine comparison mode and resolve refs
+    let (ref_from, ref_to, is_vs_base) = match (&ps_from, &ps_to) {
+        (None, None) => {
+            // Bare change: latest vs base
+            let (_, rev) = find_target_revision(&change, None)?;
+            let gerrit_ref = rev
+                .git_ref
+                .as_deref()
+                .context("current revision has no ref")?
+                .to_string();
+            let sha = subprocess::git_fetch_ref_sha(&remote, &gerrit_ref, &root)?;
+            let base_ref = format!("{sha}^");
+            eprintln!("Comparing change {} (base vs latest)...", change_id);
+            (base_ref, sha, true)
+        }
+        (Some(0), None) => {
+            // CHANGE,0 — same as bare change: base vs latest
+            let (_, rev) = find_target_revision(&change, None)?;
+            let gerrit_ref = rev
+                .git_ref
+                .as_deref()
+                .context("current revision has no ref")?
+                .to_string();
+            let sha = subprocess::git_fetch_ref_sha(&remote, &gerrit_ref, &root)?;
+            let base_ref = format!("{sha}^");
+            eprintln!("Comparing change {} (base vs latest)...", change_id);
+            (base_ref, sha, true)
+        }
+        (Some(0), Some(to)) => {
+            // Base vs PS
+            let (_, rev) = find_target_revision(&change, Some(*to))?;
+            let gerrit_ref = rev
+                .git_ref
+                .as_deref()
+                .context("target revision has no ref")?
+                .to_string();
+            let sha = subprocess::git_fetch_ref_sha(&remote, &gerrit_ref, &root)?;
+            let base_ref = format!("{sha}^");
+            eprintln!(
+                "Comparing change {} (base vs patchset {})...",
+                change_id, to
+            );
+            (base_ref, sha, true)
+        }
+        (Some(from), None) => {
+            // Single PS vs latest
+            let (_, rev_from) = find_target_revision(&change, Some(*from))?;
+            let (_, rev_to) = find_target_revision(&change, None)?;
+            let latest_num = rev_to.number.unwrap_or(0);
+            if *from == latest_num {
+                anyhow::bail!(
+                    "cannot compare patchset {} against itself (it is the latest)",
+                    from
+                );
+            }
+            let ref_from = rev_from
+                .git_ref
+                .as_deref()
+                .context("source revision has no ref")?
+                .to_string();
+            let ref_to = rev_to
+                .git_ref
+                .as_deref()
+                .context("target revision has no ref")?
+                .to_string();
+            eprintln!(
+                "Comparing change {} patchset {} vs {}...",
+                change_id, from, latest_num
+            );
+            (ref_from, ref_to, false)
+        }
+        (Some(from), Some(to)) => {
+            // PS vs PS range
+            if from == to {
+                anyhow::bail!("cannot compare patchset {} against itself", from);
+            }
+            let (_, rev_from) = find_target_revision(&change, Some(*from))?;
+            let (_, rev_to) = find_target_revision(&change, Some(*to))?;
+            let ref_from = rev_from
+                .git_ref
+                .as_deref()
+                .context("source revision has no ref")?
+                .to_string();
+            let ref_to = rev_to
+                .git_ref
+                .as_deref()
+                .context("target revision has no ref")?
+                .to_string();
+            eprintln!(
+                "Comparing change {} patchset {} vs {}...",
+                change_id, from, to
+            );
+            (ref_from, ref_to, false)
+        }
+        (&None, &Some(_)) => {
+            anyhow::bail!("invalid compare argument: cannot specify only the 'to' patchset")
+        }
+    };
 
-    eprintln!(
-        "Comparing change {} patchset {} vs {}...",
-        change_id, ps_from, ps_to_num
-    );
-    let sha_from = subprocess::git_fetch_ref_sha(&remote, &ref_from, &root)?;
-    let sha_to = subprocess::git_fetch_ref_sha(&remote, &ref_to, &root)?;
-    subprocess::git_diff(&sha_from, &sha_to, &root)?;
+    let sha_from = if is_vs_base {
+        ref_from.clone()
+    } else {
+        subprocess::git_fetch_ref_sha(&remote, &ref_from, &root)?
+    };
+    let sha_to = if is_vs_base {
+        ref_to.clone()
+    } else {
+        subprocess::git_fetch_ref_sha(&remote, &ref_to, &root)?
+    };
+
+    let should_rebase = !is_vs_base && !no_rebase && (force_rebase || app.config.default_rebase);
+
+    if should_rebase {
+        if !subprocess::check_worktree_clean(&root)? {
+            anyhow::bail!("Cannot rebase: working tree has uncommitted changes.");
+        }
+        if !subprocess::check_remote_branch_exists(&remote, branch, &root) {
+            eprintln!("Remote branch {remote}/{branch} does not exist. Skipping rebase.");
+        } else {
+            subprocess::git_remote_update(&remote, &root)?;
+            let remote_branch = format!("{remote}/{branch}");
+
+            // Create and rebase old branch
+            subprocess::git_checkout_or_reset_branch(OLD_BRANCH, &sha_from, &root)?;
+            eprintln!("Rebasing {OLD_BRANCH} onto {remote_branch}...");
+            if let Err(e) = subprocess::git_rebase(&remote_branch, &root) {
+                eprintln!("Skipping rebase because of conflicts");
+                let _ = subprocess::git_rebase_abort(&root);
+                subprocess::git_checkout(&orig_ref, &root)?;
+                subprocess::git_delete_branch(OLD_BRANCH, &root).ok();
+                return Err(e);
+            }
+
+            // Create and rebase new branch
+            subprocess::git_checkout_or_reset_branch(NEW_BRANCH, &sha_to, &root)?;
+            eprintln!("Rebasing {NEW_BRANCH} onto {remote_branch}...");
+            if let Err(e) = subprocess::git_rebase(&remote_branch, &root) {
+                eprintln!(
+                    "Rebasing of the new branch failed, diff can be messed up (use -R to not rebase at all)!"
+                );
+                let _ = subprocess::git_rebase_abort(&root);
+                subprocess::git_checkout(&orig_ref, &root)?;
+                subprocess::git_delete_branch(OLD_BRANCH, &root).ok();
+                subprocess::git_delete_branch(NEW_BRANCH, &root).ok();
+                return Err(e);
+            }
+        }
+    }
+
+    let (diff_from, diff_to): (String, String) =
+        if should_rebase && subprocess::check_remote_branch_exists(&remote, branch, &root) {
+            (OLD_BRANCH.to_string(), NEW_BRANCH.to_string())
+        } else {
+            (sha_from, sha_to)
+        };
+
+    subprocess::git_diff(&diff_from, &diff_to, &root)?;
+
+    // Restore original state and clean up temp branches
+    subprocess::git_checkout(&orig_ref, &root)?;
+    if should_rebase && subprocess::check_remote_branch_exists(&remote, branch, &root) {
+        subprocess::git_delete_branch(OLD_BRANCH, &root).ok();
+        subprocess::git_delete_branch(NEW_BRANCH, &root).ok();
+    }
 
     Ok(())
 }
@@ -630,13 +787,9 @@ pub async fn cmd_review_list(
 }
 
 /// Warn about flags that are parsed but not yet implemented.
-pub fn warn_unused_flags(args: &ReviewArgs) {
-    if args.use_pushurl {
-        tracing::warn!("--use-pushurl is not yet implemented");
-    }
-    if args.no_custom_script {
-        tracing::warn!("--no-custom-script is not yet implemented");
-    }
+pub fn warn_unused_flags(_args: &ReviewArgs) {
+    // --use-pushurl: implemented via CliOverrides
+    // --no-custom-script: accepted for compatibility, no-op (we don't run custom scripts)
 }
 
 #[cfg(test)]
@@ -1358,7 +1511,7 @@ mod tests {
     fn compare_arg_range() {
         let (change, from, to) = parse_compare_arg("12345,1-3").unwrap();
         assert_eq!(change, "12345");
-        assert_eq!(from, 1);
+        assert_eq!(from, Some(1));
         assert_eq!(to, Some(3));
     }
 
@@ -1366,18 +1519,43 @@ mod tests {
     fn compare_arg_single_patchset() {
         let (change, from, to) = parse_compare_arg("12345,1").unwrap();
         assert_eq!(change, "12345");
-        assert_eq!(from, 1);
+        assert_eq!(from, Some(1));
         assert_eq!(to, None);
     }
 
     #[test]
     fn compare_arg_no_comma() {
-        let result = parse_compare_arg("12345");
-        assert!(result.is_err());
-        assert!(
-            result.unwrap_err().to_string().contains("CHANGE,PS"),
-            "error should mention expected format"
-        );
+        let (change, from, to) = parse_compare_arg("12345").unwrap();
+        assert_eq!(change, "12345");
+        assert_eq!(from, None);
+        assert_eq!(to, None);
+    }
+
+    #[test]
+    fn compare_arg_base_vs_patchset() {
+        let (change, from, to) = parse_compare_arg("12345,0-3").unwrap();
+        assert_eq!(change, "12345");
+        assert_eq!(from, Some(0));
+        assert_eq!(to, Some(3));
+    }
+
+    #[test]
+    fn compare_arg_single_zero() {
+        // 974924,0 means base vs latest (same as bare 974924)
+        let (change, from, to) = parse_compare_arg("12345,0").unwrap();
+        assert_eq!(change, "12345");
+        assert_eq!(from, Some(0));
+        assert_eq!(to, None);
+    }
+
+    #[test]
+    fn compare_arg_same_patchset_range() {
+        let result = parse_compare_arg("12345,3-3");
+        assert!(result.is_ok());
+        let (change, from, to) = result.unwrap();
+        assert_eq!(change, "12345");
+        assert_eq!(from, Some(3));
+        assert_eq!(to, Some(3));
     }
 
     #[test]

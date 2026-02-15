@@ -319,6 +319,17 @@ pub fn git_rev_parse_head(work_dir: &Path) -> Result<String> {
     git_output(&["rev-parse", "HEAD"], work_dir)
 }
 
+/// Return the ref to restore to after a temporary checkout.
+/// When on a branch, returns the branch name (e.g. "main"); when detached, returns the SHA.
+pub fn git_head_restore_ref(work_dir: &Path) -> Result<String> {
+    let abbrev = git_output(&["rev-parse", "--abbrev-ref", "HEAD"], work_dir)?;
+    if abbrev == "HEAD" {
+        git_rev_parse_head(work_dir)
+    } else {
+        Ok(abbrev)
+    }
+}
+
 /// Rebase the current branch onto a remote branch.
 ///
 /// Uses `--rebase-merges` and sets `GIT_EDITOR=true` to avoid interactive prompts.

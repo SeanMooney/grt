@@ -40,7 +40,7 @@ Push changes to Gerrit for review (git-review compatible). When no mode flag is 
 | `--cherrypick <CHANGE>` | `-x` | Cherry-pick a change onto current branch |
 | `--cherrypickindicate <CHANGE>` | `-X` | Cherry-pick with "(cherry picked from ...)" indication |
 | `--cherrypickonly <CHANGE>` | `-N` | Apply change to working directory without committing |
-| `--compare <CHANGE,PS[-PS]>` | `-m` | Compare patchsets of a change |
+| `--compare <CHANGE[,PS[-PS]]>` | `-m` | Compare patchsets: `CHANGE` or `CHANGE,0` = base vs latest; `CHANGE,PS` = PS vs latest; `CHANGE,0-PS` = base vs PS; `CHANGE,PS-PS` = PS vs PS |
 | `--list` | `-l` | List open changes (`-l` brief, `-ll` verbose) |
 | `--setup` | `-s` | Set up repository for Gerrit |
 

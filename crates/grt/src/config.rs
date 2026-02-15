@@ -210,6 +210,8 @@ pub struct CliOverrides {
     pub branch: Option<String>,
     pub remote: Option<String>,
     pub scheme: Option<String>,
+    /// Use push URL for remote operations (--use-pushurl).
+    pub use_pushurl: Option<bool>,
     /// Allow sending credentials over plain HTTP (no TLS).
     pub insecure: bool,
 }
@@ -470,6 +472,9 @@ pub fn load_config(
     }
     if let Some(ref scheme) = cli.scheme {
         config.scheme = scheme.clone();
+    }
+    if let Some(use_push) = cli.use_pushurl {
+        config.usepushurl = use_push;
     }
 
     // Default SSH port when using ssh scheme

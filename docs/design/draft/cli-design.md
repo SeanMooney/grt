@@ -341,9 +341,6 @@ No unpushed commits found.
 ## Divergences from git-review (`git-review-workflow.md`)
 
 - **Subcommand syntax**: git-review uses `git review [branch]` (as a git subcommand). grt uses `grt review [branch]` (standalone binary with explicit subcommands), but also supports git-review-compatible flat syntax when invoked as `git-review` via symlink.
-- **No rebase workflow**: git-review's default "test rebase then undo" is not implemented. grt's `--no-rebase` flag sends `submit=false` to Gerrit, which is a different mechanism.
-- **No auto-amend**: git-review automatically amends the HEAD commit to add a Change-Id if the hook wasn't installed. grt validates the Change-Id and errors if missing, directing the user to run `grt setup`.
-- **No remote creation**: git-review auto-creates the Gerrit remote if missing. grt requires the remote to exist (verified via `grt setup`).
-- **No pre/post-review hooks**: git-review runs custom `pre-review` and `post-review` scripts. grt does not support custom hook scripts.
+- **Custom pre/post-review hooks**: git-review runs custom `pre-review` and `post-review` scripts. grt does not support custom hook scripts. The `--no-custom-script` flag is accepted for compatibility but has no effect.
 - **Comments command**: git-review has no comment retrieval feature. This is unique to grt.
 - **Export command**: git-review has no equivalent of `grt export git-review` for managing symlinks.

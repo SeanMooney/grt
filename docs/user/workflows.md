@@ -16,7 +16,7 @@ This page describes common workflows: push, list, download, cherry-pick, compare
 | Push without rebasing (e.g. merge conflict) | `grt review -R` |
 | Download a change | `grt review -d 781` |
 | Download a specific patchset | `grt review -d 781,4` |
-| Compare patchsets | `grt review -m 781,4-10` |
+| Compare patchsets | `grt review -m 781` or `grt review -m 781,4-10` |
 | List open changes | `grt review -l` |
 | Set up repository (hook, remote) | `grt review -s` or `grt setup` |
 
@@ -105,19 +105,17 @@ grt review -N 12345
 
 ## Comparing Patchsets
 
-Compare two patchsets of a change:
+Compare mode supports four forms:
 
-```bash
-grt review -m 12345,1-3
-```
+| Form | Example | Meaning |
+|------|---------|---------|
+| Bare change | `grt review -m 12345` | Diff base vs latest patchset |
+| Base vs latest (explicit) | `grt review -m 12345,0` | Same as bare change; `0` = base |
+| Single patchset | `grt review -m 12345,1` | Diff patchset 1 vs latest (git-review compat) |
+| Base vs patchset | `grt review -m 12345,0-3` | Diff base vs patchset 3 (`0` = base sentinel) |
+| Patchset range | `grt review -m 12345,1-3` | Diff patchset 1 vs patchset 3 |
 
-This diffs patchset 1 against patchset 3. To compare patchset 1 against the current revision:
-
-```bash
-grt review -m 12345,1
-```
-
-grt fetches both refs and runs `git diff`.
+Diff order is always `git diff old new` (first = old, second = new). grt fetches the refs and runs `git diff`.
 
 ## Retrieving Comments
 
