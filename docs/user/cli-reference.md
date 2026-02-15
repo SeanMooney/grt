@@ -104,6 +104,7 @@ Push changes to Gerrit for review (git-review compatible). When no mode flag is 
 | `--no-thin` | | Disable thin pack for push |
 | `--remote-hook` | | Execute a remote hook after push |
 | `--no-custom-script` | | Do not run custom scripts |
+| `--format <FMT>` | | Output format: `text` (default) or `json` — applies to list, download, and push modes |
 
 ### grt push
 
@@ -131,6 +132,7 @@ Push changes to Gerrit (native grt interface, subset of review flags).
 | `--yes` | `-y` | Skip confirmation prompt |
 | `--new-changeid` | | Generate a new Change-Id |
 | `--no-thin` | | Disable thin pack for push |
+| `--format <FMT>` | | Output format: `text` (default) or `json` |
 
 ### grt comments
 

@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use clap::Args;
+use serde::Serialize;
 use tracing::debug;
 
 use crate::app::App;
@@ -188,6 +189,26 @@ pub struct ReviewArgs {
     /// Do not run custom scripts
     #[arg(long)]
     pub no_custom_script: bool,
+
+    /// Output format (applies to --list, --download, and push modes)
+    #[arg(long, value_enum, default_value = "text")]
+    pub format: OutputFormat,
+}
+
+/// Output format for structured data.
+#[derive(Debug, Clone, clap::ValueEnum)]
+pub enum OutputFormat {
+    Text,
+    Json,
+}
+
+/// Structured result from a download operation.
+#[derive(Debug, Serialize)]
+pub struct DownloadResult {
+    pub branch: String,
+    pub change_number: Option<i64>,
+    pub patchset: i32,
+    pub upstream: String,
 }
 
 /// Attempt to parse a Gerrit change URL into a `"CHANGE[,PS]"` string.
@@ -323,7 +344,11 @@ pub fn download_branch_name(change: &ChangeInfo, patchset: i32) -> String {
 }
 
 /// Download a change from Gerrit: fetch the ref and create a local branch.
-pub async fn cmd_review_download(app: &mut App, change_arg: &str) -> Result<()> {
+pub async fn cmd_review_download(
+    app: &mut App,
+    change_arg: &str,
+    format: &OutputFormat,
+) -> Result<()> {
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
@@ -355,7 +380,21 @@ pub async fn cmd_review_download(app: &mut App, change_arg: &str) -> Result<()> 
     // Set upstream tracking for the new branch
     let upstream = format!("{remote}/{}", change.branch.as_deref().unwrap_or("master"));
     subprocess::git_set_upstream_tracking(&branch, &upstream, &root)?;
-    eprintln!("Switched to branch '{branch}'");
+
+    match format {
+        OutputFormat::Json => {
+            let result = DownloadResult {
+                branch: branch.clone(),
+                change_number: change.number,
+                patchset: ps_num,
+                upstream: upstream.clone(),
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        OutputFormat::Text => {
+            eprintln!("Switched to branch '{branch}'");
+        }
+    }
 
     Ok(())
 }
@@ -543,7 +582,12 @@ pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> 
 /// Queries `status:open project:<project>` (and `branch:<branch>` if specified).
 /// Brief mode (`-l`) shows number, branch, subject.
 /// Verbose mode (`-ll`) adds a topic column.
-pub async fn cmd_review_list(app: &mut App, branch: Option<&str>, verbose: bool) -> Result<()> {
+pub async fn cmd_review_list(
+    app: &mut App,
+    branch: Option<&str>,
+    verbose: bool,
+    format: &OutputFormat,
+) -> Result<()> {
     let root = app.git.root()?;
     let remote = app.config.remote.clone();
     let remote_url =
@@ -562,16 +606,26 @@ pub async fn cmd_review_list(app: &mut App, branch: Option<&str>, verbose: bool)
             .await?;
 
     if changes.is_empty() {
+        if matches!(format, OutputFormat::Json) {
+            println!("[]");
+        }
         return Ok(());
     }
 
-    let output = if verbose {
-        list::format_reviews_verbose(&changes)
-    } else {
-        list::format_reviews_text(&changes)
-    };
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&changes)?);
+        }
+        OutputFormat::Text => {
+            let output = if verbose {
+                list::format_reviews_verbose(&changes)
+            } else {
+                list::format_reviews_text(&changes)
+            };
+            print!("{output}");
+        }
+    }
 
-    print!("{output}");
     Ok(())
 }
 

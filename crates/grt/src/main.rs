@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand};
 use tracing::debug;
 
 use grt::app::App;
@@ -13,9 +13,9 @@ use grt::config::CliOverrides;
 use grt::export::{self, ExportArgs};
 use grt::gerrit::GerritError;
 use grt::hook;
-use grt::push::{self, ChangeIdStatus, PushOptions};
+use grt::push::{self, ChangeIdStatus, PushOptions, PushResult};
 use grt::rebase;
-use grt::review::{self, ReviewArgs};
+use grt::review::{self, OutputFormat, ReviewArgs};
 use grt::review_query;
 use grt::subprocess;
 
@@ -175,6 +175,10 @@ struct PushArgs {
     /// Disable thin pack for push
     #[arg(long)]
     no_thin: bool,
+
+    /// Output format
+    #[arg(long, value_enum, default_value = "text")]
+    format: OutputFormat,
 }
 
 #[derive(Parser, Debug)]
@@ -216,12 +220,6 @@ struct SetupArgs {
     /// Download hook from remote Gerrit server instead of using vendored copy
     #[arg(long)]
     remote_hook: bool,
-}
-
-#[derive(Debug, Clone, ValueEnum)]
-enum OutputFormat {
-    Text,
-    Json,
 }
 
 /// CLI personality based on argv[0].
@@ -444,7 +442,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
 
     // Download mode
     if let Some(ref change_arg) = args.download {
-        return review::cmd_review_download(&mut app, change_arg).await;
+        return review::cmd_review_download(&mut app, change_arg, &args.format).await;
     }
 
     // Cherry-pick modes
@@ -465,7 +463,8 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
 
     // List mode
     if args.list > 0 {
-        return review::cmd_review_list(&mut app, branch.as_deref(), args.list >= 2).await;
+        return review::cmd_review_list(&mut app, branch.as_deref(), args.list >= 2, &args.format)
+            .await;
     }
 
     // Pre-push: --update runs `git remote update`
@@ -520,6 +519,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
             yes: args.yes,
             new_changeid: false, // already handled above
             no_thin: args.no_thin,
+            format: args.format.clone(),
         },
         insecure,
     )
@@ -675,7 +675,23 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
         return Err(e);
     }
 
-    eprintln!("Push successful.");
+    match args.format {
+        OutputFormat::Json => {
+            // Re-read commit message to get Change-Id (may have been added by amend)
+            let commit_msg = app.git.head_commit_message().unwrap_or_default();
+            let result = PushResult {
+                commits: count,
+                remote: remote.clone(),
+                branch: branch.clone(),
+                change_id: push::extract_change_id(&commit_msg),
+                refspec: refspec.clone(),
+            };
+            println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        OutputFormat::Text => {
+            eprintln!("Push successful.");
+        }
+    }
 
     // Post-push: undo rebase unless force-rebase was requested
     if let Some(ref orig_head) = rebase_orig_head {

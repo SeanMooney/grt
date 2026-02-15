@@ -76,6 +76,17 @@ All project knowledge lives in documentation files. Use `manifest.toon` to find 
 - **No sync obligations** — cross-references are links, not duplicated content
 - **Incremental population** — stubs exist for all planned docs; status tracked in `manifest.toon`
 
+## Claude Code Skill
+
+grt ships a Claude Code plugin in `.claude-plugin/` that teaches the `/grt` skill. When you add or change grt CLI capabilities, update the skill to match:
+
+1. **New command or flag** — update `references/grt-commands.md` and add a workflow section in `SKILL.md` if the command introduces a new user-facing workflow.
+2. **Changed JSON output** — update `references/comment-json-schema.md` to reflect the new schema. The source of truth is the struct definitions in `crates/grt/src/comments.rs`.
+3. **New exit code or error** — update the error handling table in `SKILL.md` and the exit codes table in `references/grt-commands.md`.
+4. **New write API operation** (e.g., submit, vote) — remove the corresponding "cannot do this" note from the safety rules in `SKILL.md` and add the workflow.
+
+The skill must stay in sync with `docs/user/cli-reference.md` — the CLI reference is the source of truth, the skill is a derived, agent-optimized view.
+
 ## Session Protocol
 
 At the end of your session:

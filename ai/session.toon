@@ -1,6 +1,6 @@
-phase: SSH query parity complete
+phase: JSON output and README complete
 
-completed[16]{task,detail}:
+completed[17]{task,detail}:
   Phase 0: Infrastructure,Added workspace deps envrc gitignore; upgraded Rust 1.82->1.85 for edition2024 transitive deps
   Phase 1: Config + Git Repo,config.rs (.gitreview INI parser layered config) git.rs (gix wrapper for repo discovery HEAD config hooks)
   Phase 2: Gerrit REST Client,gerrit.rs (reqwest client XSSI stripping serde types all endpoints) with mockito integration tests
@@ -18,6 +18,8 @@ completed[16]{task,detail}:
   Phase 14: Code Review Fixes,Fixed remaining 12 issues: pre-push rebase (H2) remote hook download (L10) URL rewriting (L16) warn_unused_flags wiring (M14/N1) commit safety (M15) submodule hook propagation (L9/N2) current_branch_or_default (L11/N4) remote auto-creation (L19/N3) single App instance (N5)
   Phase 15: SSH Query Parity,review_query.rs protocol-aware layer: resolve_remote_url (pushurl+insteadOf) is_http_remote query_changes get_change_all_revisions; SSH backend (parse_gerrit_ssh_params run_gerrit_query_ssh parse_ssh_query_output); review modes wired to transport; setup hook uses resolve_remote_url; tests for transport selector URL parsing stats-line handling; docs updated (gerrit-client git-operations architecture)
   Phase 16: User Documentation,docs/user/ created: README getting-started installation cli-reference configuration workflows; manifest.toon updated with 6 new doc entries
+  Phase 17: Claude Code Plugin,.claude-plugin/ created: plugin.json SKILL.md (core skill with frontmatter workflows safety rules) references/ (grt-commands.md comment-json-schema.md feedback-loop-protocol.md); manifest.toon and repo-layout.md updated
+  Phase 18: JSON Output & README,Root README.md created; Serialize added to 8 gerrit.rs API types; OutputFormat moved to review.rs; --format json wired to review -l (ChangeInfo array) review -d (DownloadResult) push (PushResult); SKILL.md updated with tips batch-workflow and JSON examples; grt-commands.md cli-reference.md updated with --format flag; manifest.toon and repo-layout.md updated
 
 in_progress: Nothing
 
@@ -31,6 +33,7 @@ decisions_pending[0]:
 
 test_status: 317 tests passing (258 lib + 49 main + 10 integration)
 lint_status: cargo fmt clippy all pass clean
+last_session: Phase 18 — JSON structured output for list/download/push; root README.md; skill updates
 
 handoff_notes[22]:
   grt is now a drop-in git-review replacement via busybox argv[0] detection
@@ -56,3 +59,4 @@ handoff_notes[22]:
   cmd_review uses single App instance (was 10+ separate App::new calls)
   SSH query parity: review list/download/cherry-pick/compare use HTTP or SSH based on remote URL; setup --remote-hook uses same resolved URL; GIT_SSH respected; stats lines in SSH output skipped
   User docs: docs/user/ (README getting-started installation cli-reference configuration workflows) — see manifest.toon
+  Claude Code plugin: .claude-plugin/ with /grt skill — core workflows (list download cherry-pick compare push comments) + 6-phase feedback loop protocol for addressing review feedback with human-in-the-loop checkpoints

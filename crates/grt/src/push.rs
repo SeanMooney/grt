@@ -2,6 +2,17 @@
 // Copyright (c) 2026 grt contributors
 
 use anyhow::{Context, Result};
+use serde::Serialize;
+
+/// Structured result from a push operation.
+#[derive(Debug, Serialize)]
+pub struct PushResult {
+    pub commits: usize,
+    pub remote: String,
+    pub branch: String,
+    pub change_id: Option<String>,
+    pub refspec: String,
+}
 
 /// Options for building a Gerrit push refspec.
 #[derive(Debug, Default)]

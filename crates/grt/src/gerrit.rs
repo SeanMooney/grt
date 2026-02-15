@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 use url::Url;
 
@@ -387,7 +387,7 @@ impl<W: std::io::Write> std::io::Write for Base64Encoder<W> {
 
 // ---- Gerrit API response types ----
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AccountInfo {
     #[serde(rename = "_account_id")]
     pub account_id: Option<i64>,
@@ -397,7 +397,7 @@ pub struct AccountInfo {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ChangeInfo {
     pub id: Option<String>,
     pub project: Option<String>,
@@ -418,7 +418,7 @@ pub struct ChangeInfo {
     pub deletions: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct RevisionInfo {
     #[serde(rename = "_number")]
     pub number: Option<i32>,
@@ -427,7 +427,7 @@ pub struct RevisionInfo {
     pub commit: Option<CommitInfo>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CommitInfo {
     pub subject: Option<String>,
     pub message: Option<String>,
@@ -435,14 +435,14 @@ pub struct CommitInfo {
     pub committer: Option<GitPersonInfo>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct GitPersonInfo {
     pub name: Option<String>,
     pub email: Option<String>,
     pub date: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CommentInfo {
     pub id: Option<String>,
     pub path: Option<String>,
@@ -456,7 +456,7 @@ pub struct CommentInfo {
     pub unresolved: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CommentRange {
     pub start_line: i32,
     pub start_character: i32,
@@ -464,7 +464,7 @@ pub struct CommentRange {
     pub end_character: i32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ChangeMessageInfo {
     pub id: Option<String>,
     pub author: Option<AccountInfo>,

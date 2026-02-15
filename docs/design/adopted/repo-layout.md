@@ -15,8 +15,20 @@ reference specifications, and AI agent memory files.
 
 ```
 grt/
+├── README.md                       # Project overview, quick start, Claude Code setup
 ├── CLAUDE.md                       # AI agent entry point (AGENTS.md)
 ├── manifest.toon                   # Document index for agentic RAG
+│
+├── .claude-plugin/                  # Claude Code plugin for Gerrit skill
+│   ├── plugin.json                  # Plugin manifest
+│   └── skills/
+│       └── grt/
+│           ├── SKILL.md             # Core skill (workflows, safety rules)
+│           └── references/
+│               ├── grt-commands.md          # Agent-optimized command reference
+│               ├── comment-json-schema.md   # JSON output schema
+│               └── feedback-loop-protocol.md # 6-phase feedback loop
+│
 ├── Cargo.toml                      # Workspace root
 ├── Cargo.lock                      # Committed — reproducible builds
 ├── rust-toolchain.toml             # Pinned Rust version + components
