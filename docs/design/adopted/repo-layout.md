@@ -41,6 +41,13 @@ grt/
 │           └── main.rs             # Entry point, CLI parsing
 │
 ├── docs/
+│   ├── user/                        # User-facing documentation
+│   │   ├── README.md                # Landing page, table of contents
+│   │   ├── getting-started.md      # Quickstart walkthrough
+│   │   ├── installation.md         # Build, install, nix, git-review export
+│   │   ├── cli-reference.md       # Command and flag reference
+│   │   ├── configuration.md        # .gitreview, grt config, credentials
+│   │   └── workflows.md            # Push, list, download, cherry-pick, etc.
 │   └── design/
 │       ├── README.md               # Navigation hub, traceability matrix
 │       ├── draft/                   # Design docs in progress

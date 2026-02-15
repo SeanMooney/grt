@@ -2,7 +2,7 @@ project: grt
 version: 0.1.0
 phase: git-review parity complete
 
-docs[29]{path,type,status,topics,summary}:
+docs[35]{path,type,status,topics,summary}:
   AGENTS.md,guide,complete,entry-point session-protocol,AI agent entry point and knowledge base guide
   docs/design/adopted/tech-stack.md,guide,adopted,rust tokio ratatui sqlx gix reqwest,Technology selections crate rationale and dependency decisions
   ai/context.toon,ai,complete,overview tech-stack layout,Stable project context and repo layout
@@ -32,3 +32,9 @@ docs[29]{path,type,status,topics,summary}:
   docs/design/draft/sync-engine.md,design,stub,async sync offline scheduling,Async sync task scheduling and offline mode
   docs/design/draft/error-handling.md,design,draft,anyhow thiserror gerrit-error retry exit-codes,Typed GerritError enum retry with backoff exit code mapping and anyhow context propagation
   docs/design/decisions/README.md,guide,complete,adr decisions,ADR index and template
+  docs/user/README.md,guide,complete,user-docs toc overview,User docs landing page and table of contents
+  docs/user/getting-started.md,guide,complete,quickstart install setup push list download,Quickstart from install through first push list and download
+  docs/user/installation.md,guide,complete,cargo nix git-review completions,Build install nix export git-review shell completions
+  docs/user/cli-reference.md,guide,complete,commands flags exit-codes,Complete CLI reference with all commands flags and exit codes
+  docs/user/configuration.md,guide,complete,gitreview grt-config credentials url-rewrites,.gitreview grt config credentials URL rewrites SSH vs HTTP
+  docs/user/workflows.md,guide,complete,push list download cherry-pick compare comments setup,Workflow guides for push list download cherry-pick compare comments and setup
