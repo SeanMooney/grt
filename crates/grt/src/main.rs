@@ -16,6 +16,7 @@ use grt::hook;
 use grt::push::{self, ChangeIdStatus, PushOptions};
 use grt::rebase;
 use grt::review::{self, ReviewArgs};
+use grt::review_query;
 use grt::subprocess;
 
 /// grt — CLI/TUI tool for Git and Gerrit workflows
@@ -464,7 +465,7 @@ async fn cmd_review(work_dir: &Path, args: ReviewArgs, insecure: bool) -> Result
 
     // List mode
     if args.list > 0 {
-        return review::cmd_review_list(&app, branch.as_deref(), args.list >= 2).await;
+        return review::cmd_review_list(&mut app, branch.as_deref(), args.list >= 2).await;
     }
 
     // Pre-push: --update runs `git remote update`
@@ -775,14 +776,15 @@ async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<(
         std::fs::remove_file(&hook_path).context("removing existing commit-msg hook")?;
     }
     if args.remote_hook {
-        // Download hook from remote Gerrit server
+        // Download hook from remote Gerrit server (HTTP or SCP based on remote URL)
         let remote_name = args.remote.as_deref().unwrap_or(&app.config.remote);
-        let remote_url = subprocess::git_output(&["remote", "get-url", remote_name], &root)
-            .ok()
-            .unwrap_or_else(|| {
-                let base = app.config.gerrit_base_url().map(|u| u.to_string());
-                base.unwrap_or_default()
-            });
+        let remote_url = review_query::resolve_remote_url(
+            remote_name,
+            &root,
+            Some(&app.config.make_remote_url()),
+        )?
+        .or_else(|| app.config.gerrit_base_url().ok().map(|u| u.to_string()))
+        .context("no remote URL for hook download")?;
         hook::fetch_remote_hook(&remote_url, &hooks_dir).await?;
     } else {
         hook::ensure_hook_installed(&hooks_dir)?;

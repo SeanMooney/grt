@@ -96,7 +96,7 @@ See [repo-layout.md](../adopted/repo-layout.md) for the source file layout.
 
 **Dependencies:** None (leaf module — uses only reqwest and serde).
 
-**Design note:** REST-only, no SSH. Strips Gerrit's XSSI prefix dynamically. Implements retry with exponential backoff for transient errors. See [ref-specs/git-review-gerrit-api.md § grt Divergences](../ref-specs/git-review-gerrit-api.md#grt-divergences).
+**Design note:** Dual protocol (HTTP/SSH) for change queries; transport selected from remote URL. Strips Gerrit's XSSI prefix dynamically. Implements retry with exponential backoff for transient errors. See [ref-specs/git-review-gerrit-api.md § grt Divergences](../ref-specs/git-review-gerrit-api.md#grt-divergences).
 
 ### git.rs — Git Operations
 

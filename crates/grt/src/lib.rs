@@ -12,4 +12,5 @@ pub mod list;
 pub mod push;
 pub mod rebase;
 pub mod review;
+pub mod review_query;
 pub mod subprocess;

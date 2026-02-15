@@ -423,6 +423,16 @@ pub fn check_remote_exists(remote: &str, work_dir: &Path) -> Result<Option<Strin
     }
 }
 
+/// Get a git config value by key (e.g. "remote.gerrit.pushurl").
+///
+/// Returns `Ok(Some(value))` if the key exists, `Ok(None)` if it doesn't.
+pub fn git_config_get(key: &str, work_dir: &Path) -> Result<Option<String>> {
+    match git_output(&["config", "--get", key], work_dir) {
+        Ok(value) => Ok(Some(value)),
+        Err(_) => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

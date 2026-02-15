@@ -6,9 +6,9 @@
 
 ## Overview
 
-grt communicates with Gerrit exclusively through its REST API over HTTP/HTTPS. There is no SSH protocol support -- the REST API is strictly more capable than Gerrit's SSH command interface, and a single protocol path simplifies the client significantly.
+grt communicates with Gerrit through either its REST API (HTTP/HTTPS) or SSH, depending on the remote URL. When the remote uses `http://` or `https://`, grt uses the REST API. When the remote uses `ssh://` or SCP-style URLs, grt uses `ssh ... gerrit query` for change queries (list, download, cherry-pick, compare), matching git-review's dual-protocol behavior.
 
-The client is built on `reqwest`, an async HTTP client for Rust. It handles Gerrit's XSSI prefix stripping, HTTP Basic and Bearer token authentication, response deserialization via serde, connection management with configurable timeouts, and retry with exponential backoff on transient failures.
+The REST client is built on `reqwest`, an async HTTP client for Rust. It handles Gerrit's XSSI prefix stripping, HTTP Basic and Bearer token authentication, response deserialization via serde, connection management with configurable timeouts, and retry with exponential backoff on transient failures.
 
 The `GerritClient` struct owns a `reqwest::Client` instance (which provides connection pooling internally) along with the base URL and optional credentials. All public methods are `async` and return `anyhow::Result<T>`.
 
@@ -268,7 +268,7 @@ Gerrit prepends `)]}'\n` (or `)]}\n` without the quote) to JSON responses as an 
 
 ### vs. git-review (`git-review-gerrit-api.md`)
 
-- **REST-only**: git-review supports both SSH and HTTP protocols. grt uses REST exclusively.
+- **Dual protocol**: grt matches git-review: HTTP/HTTPS remotes use REST; SSH/SCP remotes use `ssh gerrit query` for change metadata. Transport is selected from the resolved remote URL (pushurl + insteadOf/pushInsteadOf).
 - **No 401-retry**: git-review makes an unauthenticated request first, then retries with credentials on 401. grt sends credentials upfront when available.
 - **Dynamic XSSI stripping**: git-review hardcodes `text[4:]`. grt finds the first newline and checks for the `)]}` prefix.
 - **Retry with backoff**: git-review does not retry on transient errors. grt retries 5xx and network failures with exponential backoff.

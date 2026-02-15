@@ -64,7 +64,7 @@ async fn get_self_account_success() {
 
     let client = test_client_with_auth(&server.url());
     let account = client.get_self_account().await.unwrap();
-    assert_eq!(account.account_id, 1000096);
+    assert_eq!(account.account_id, Some(1000096));
     assert_eq!(account.name.as_deref(), Some("Alice Smith"));
     mock.assert_async().await;
 }

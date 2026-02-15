@@ -8,6 +8,7 @@ use tracing::debug;
 use crate::app::App;
 use crate::gerrit::{ChangeInfo, RevisionInfo};
 use crate::list;
+use crate::review_query;
 use crate::subprocess;
 
 /// Allowed notification levels for Gerrit push.
@@ -326,16 +327,23 @@ pub async fn cmd_review_download(app: &mut App, change_arg: &str) -> Result<()> 
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    app.authenticate_and_verify().await?;
+    let root = app.git.root()?;
+    let remote = app.config.remote.clone();
+    let remote_url =
+        review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
+            .context("no remote URL configured")?;
+
+    if review_query::is_http_remote(&remote_url) {
+        app.authenticate_and_verify().await?;
+    }
 
     debug!("fetching change {} (patchset: {:?})", change_id, patchset);
-    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    let change =
+        review_query::get_change_all_revisions(&remote_url, &change_id, &app.gerrit, &root).await?;
     let (_, revision) = find_target_revision(&change, patchset)?;
     let ps_num = revision.number.context("revision has no patchset number")?;
     let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
 
-    let remote = app.config.remote.clone();
-    let root = app.git.root()?;
     let branch = download_branch_name(&change, ps_num);
 
     eprintln!(
@@ -357,14 +365,20 @@ pub async fn cmd_review_cherrypick(app: &mut App, change_arg: &str) -> Result<()
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    app.authenticate_and_verify().await?;
+    let root = app.git.root()?;
+    let remote = app.config.remote.clone();
+    let remote_url =
+        review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
+            .context("no remote URL configured")?;
 
-    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    if review_query::is_http_remote(&remote_url) {
+        app.authenticate_and_verify().await?;
+    }
+
+    let change =
+        review_query::get_change_all_revisions(&remote_url, &change_id, &app.gerrit, &root).await?;
     let (_, revision) = find_target_revision(&change, patchset)?;
     let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
-
-    let remote = app.config.remote.clone();
-    let root = app.git.root()?;
 
     eprintln!("Cherry-picking change {}...", change_id);
     subprocess::git_fetch_ref(&remote, git_ref, &root)?;
@@ -379,14 +393,20 @@ pub async fn cmd_review_cherrypickindicate(app: &mut App, change_arg: &str) -> R
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    app.authenticate_and_verify().await?;
+    let root = app.git.root()?;
+    let remote = app.config.remote.clone();
+    let remote_url =
+        review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
+            .context("no remote URL configured")?;
 
-    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    if review_query::is_http_remote(&remote_url) {
+        app.authenticate_and_verify().await?;
+    }
+
+    let change =
+        review_query::get_change_all_revisions(&remote_url, &change_id, &app.gerrit, &root).await?;
     let (_, revision) = find_target_revision(&change, patchset)?;
     let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
-
-    let remote = app.config.remote.clone();
-    let root = app.git.root()?;
 
     eprintln!("Cherry-picking change {} (with indication)...", change_id);
     subprocess::git_fetch_ref(&remote, git_ref, &root)?;
@@ -401,14 +421,20 @@ pub async fn cmd_review_cherrypickonly(app: &mut App, change_arg: &str) -> Resul
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    app.authenticate_and_verify().await?;
+    let root = app.git.root()?;
+    let remote = app.config.remote.clone();
+    let remote_url =
+        review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
+            .context("no remote URL configured")?;
 
-    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    if review_query::is_http_remote(&remote_url) {
+        app.authenticate_and_verify().await?;
+    }
+
+    let change =
+        review_query::get_change_all_revisions(&remote_url, &change_id, &app.gerrit, &root).await?;
     let (_, revision) = find_target_revision(&change, patchset)?;
     let git_ref = revision.git_ref.as_deref().context("revision has no ref")?;
-
-    let remote = app.config.remote.clone();
-    let root = app.git.root()?;
 
     eprintln!(
         "Applying change {} to working directory (no commit)...",
@@ -469,13 +495,22 @@ pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> 
     };
     let (change_id, ps_from, ps_to) = parse_compare_arg(&normalized)?;
 
-    app.authenticate_and_verify().await?;
+    let root = app.git.root()?;
+    let remote = app.config.remote.clone();
+    let remote_url =
+        review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
+            .context("no remote URL configured")?;
+
+    if review_query::is_http_remote(&remote_url) {
+        app.authenticate_and_verify().await?;
+    }
 
     debug!(
         "comparing change {} patchset {} vs {:?}",
         change_id, ps_from, ps_to
     );
-    let change = app.gerrit.get_change_all_revisions(&change_id).await?;
+    let change =
+        review_query::get_change_all_revisions(&remote_url, &change_id, &app.gerrit, &root).await?;
 
     let (_, rev_from) = find_target_revision(&change, Some(ps_from))?;
     let ref_from = rev_from
@@ -491,9 +526,6 @@ pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> 
         .as_deref()
         .context("target revision has no ref")?
         .to_string();
-
-    let remote = app.config.remote.clone();
-    let root = app.git.root()?;
 
     eprintln!(
         "Comparing change {} patchset {} vs {}...",
@@ -511,11 +543,23 @@ pub async fn cmd_review_compare(app: &mut App, compare_arg: &str) -> Result<()> 
 /// Queries `status:open project:<project>` (and `branch:<branch>` if specified).
 /// Brief mode (`-l`) shows number, branch, subject.
 /// Verbose mode (`-ll`) adds a topic column.
-pub async fn cmd_review_list(app: &App, branch: Option<&str>, verbose: bool) -> Result<()> {
+pub async fn cmd_review_list(app: &mut App, branch: Option<&str>, verbose: bool) -> Result<()> {
+    let root = app.git.root()?;
+    let remote = app.config.remote.clone();
+    let remote_url =
+        review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
+            .context("no remote URL configured")?;
+
+    if review_query::is_http_remote(&remote_url) {
+        app.authenticate_and_verify().await?;
+    }
+
     let query = list::build_list_query(&app.config.project, branch);
     debug!("listing changes with query: {}", query);
 
-    let changes = app.gerrit.query_changes(&query).await?;
+    let changes =
+        review_query::query_changes(&remote_url, &app.config.project, branch, &app.gerrit, &root)
+            .await?;
 
     if changes.is_empty() {
         return Ok(());
@@ -1169,7 +1213,7 @@ mod tests {
             updated: None,
             number: Some(12345),
             owner: Some(crate::gerrit::AccountInfo {
-                account_id: 1000096,
+                account_id: Some(1000096),
                 name: Some("Alice".to_string()),
                 email: None,
                 username: Some("alice".to_string()),

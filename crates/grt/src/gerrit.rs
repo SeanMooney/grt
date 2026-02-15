@@ -390,7 +390,7 @@ impl<W: std::io::Write> std::io::Write for Base64Encoder<W> {
 #[derive(Debug, Deserialize)]
 pub struct AccountInfo {
     #[serde(rename = "_account_id")]
-    pub account_id: i64,
+    pub account_id: Option<i64>,
     pub name: Option<String>,
     pub email: Option<String>,
     pub username: Option<String>,
@@ -510,7 +510,7 @@ mod tests {
             "username": "alice"
         }"#;
         let account: AccountInfo = serde_json::from_str(json).unwrap();
-        assert_eq!(account.account_id, 1000096);
+        assert_eq!(account.account_id, Some(1000096));
         assert_eq!(account.name.as_deref(), Some("Alice Smith"));
         assert_eq!(account.email.as_deref(), Some("alice@example.com"));
     }

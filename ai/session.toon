@@ -1,6 +1,6 @@
-phase: git-review feature parity complete + code review fixes
+phase: SSH query parity complete
 
-completed[15]{task,detail}:
+completed[16]{task,detail}:
   Phase 0: Infrastructure,Added workspace deps envrc gitignore; upgraded Rust 1.82->1.85 for edition2024 transitive deps
   Phase 1: Config + Git Repo,config.rs (.gitreview INI parser layered config) git.rs (gix wrapper for repo discovery HEAD config hooks)
   Phase 2: Gerrit REST Client,gerrit.rs (reqwest client XSSI stripping serde types all endpoints) with mockito integration tests
@@ -16,6 +16,7 @@ completed[15]{task,detail}:
   Phase 12: Remaining Flags & Bearer Auth,--track (upstream resolution) --update (remote update) --new-changeid (regenerate) --finish (post-push cleanup) AuthType enum bearer token support
   Phase 13: Completions & Error Handling,GerritError typed enum with is_retryable(); retry with exponential backoff (3 retries 1s/2s/4s); shell completions (bash/zsh/fish); exit code mapping (0/1/2/3/40/128)
   Phase 14: Code Review Fixes,Fixed remaining 12 issues: pre-push rebase (H2) remote hook download (L10) URL rewriting (L16) warn_unused_flags wiring (M14/N1) commit safety (M15) submodule hook propagation (L9/N2) current_branch_or_default (L11/N4) remote auto-creation (L19/N3) single App instance (N5)
+  Phase 15: SSH Query Parity,review_query.rs protocol-aware layer: resolve_remote_url (pushurl+insteadOf) is_http_remote query_changes get_change_all_revisions; SSH backend (parse_gerrit_ssh_params run_gerrit_query_ssh parse_ssh_query_output); review modes wired to transport; setup hook uses resolve_remote_url; tests for transport selector URL parsing stats-line handling; docs updated (gerrit-client git-operations architecture)
 
 in_progress: Nothing
 
@@ -27,7 +28,7 @@ next_steps[4]:
 
 decisions_pending[0]:
 
-test_status: 304 tests passing (245 lib + 49 main + 10 integration)
+test_status: 317 tests passing (258 lib + 49 main + 10 integration)
 lint_status: cargo fmt clippy all pass clean
 
 handoff_notes[21]:
@@ -52,3 +53,4 @@ handoff_notes[21]:
   URL rewriting: insteadOf/pushInsteadOf support via populate_rewrites/alias_url
   Remote auto-creation: check_and_create_remote builds URL from config (uses config.username)
   cmd_review uses single App instance (was 10+ separate App::new calls)
+  SSH query parity: review list/download/cherry-pick/compare use HTTP or SSH based on remote URL; setup --remote-hook uses same resolved URL; GIT_SSH respected; stats lines in SSH output skipped

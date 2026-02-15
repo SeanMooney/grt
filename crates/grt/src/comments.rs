@@ -418,7 +418,7 @@ mod tests {
                     message: Some(self.message),
                     updated: Some("2025-02-10 14:00:00".to_string()),
                     author: Some(AccountInfo {
-                        account_id: 1,
+                        account_id: Some(1),
                         name: Some(self.author),
                         email: None,
                         username: None,
@@ -646,7 +646,7 @@ mod tests {
             subject: Some("Fix bug".into()),
             number: Some(12345),
             owner: Some(AccountInfo {
-                account_id: 1,
+                account_id: Some(1),
                 name: Some("Alice".into()),
                 email: Some("alice@example.com".into()),
                 username: None,

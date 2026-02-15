@@ -255,6 +255,6 @@ Currently, `git push` is always done via subprocess because gix's push support m
 - **No auto-amend for missing Change-Id**: git-review amends the commit if the hook wasn't installed. grt returns an error.
 - **No remote creation**: git-review creates the Gerrit remote if it doesn't exist. grt assumes it exists.
 - **No submodule hook propagation**: git-review copies the commit-msg hook into submodules. grt installs it only in the main repository.
-- **Vendored hook only**: git-review supports fetching the hook via HTTP or SCP. grt always uses the vendored copy.
+- **Hook fetch**: git-review supports fetching the hook via HTTP or SCP. grt supports both when using `--remote-hook`; the protocol (HTTP vs SCP) is chosen from the resolved remote URL, matching git-review.
 - **Strict Change-Id validation**: git-review checks for any `Change-Id:` prefix. grt validates the full format (I + 40 hex characters).
 - **URL parsing**: git-review does not parse Gerrit URLs for download. grt supports multiple URL formats for change argument normalization.
