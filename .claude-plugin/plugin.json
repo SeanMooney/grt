@@ -1,5 +1,5 @@
 {
-  "name": "grt-gerrit",
+  "name": "grt",
   "description": "Interact with Gerrit code review via the grt CLI",
   "version": "0.1.0"
 }

@@ -1,0 +1,13 @@
+{
+  "name": "grt",
+  "owner": {
+    "name": "grt contributors"
+  },
+  "plugins": [
+    {
+      "name": "grt",
+      "description": "Interact with Gerrit code review via the grt CLI",
+      "source": "./"
+    }
+  ]
+}
