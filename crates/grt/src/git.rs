@@ -117,26 +117,29 @@ impl GitRepo {
 mod tests {
     use super::*;
 
-    fn init_repo(dir: &Path) {
-        std::process::Command::new("git")
-            .args(["init", "--initial-branch=main"])
+    /// Run a git command in the test directory, isolated from user/global config.
+    fn git_cmd(args: &[&str], dir: &Path) -> std::process::Command {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(args)
             .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        cmd
+    }
+
+    /// Initialize a git repo with an initial commit on a named branch.
+    fn init_repo(dir: &Path) {
+        git_cmd(&["init", "--initial-branch=master"], dir)
             .output()
             .expect("git init failed");
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir)
+        git_cmd(&["config", "user.email", "test@test.com"], dir)
             .output()
             .expect("git config failed");
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir)
+        git_cmd(&["config", "user.name", "Test"], dir)
             .output()
             .expect("git config failed");
         // Create an initial commit so HEAD exists
-        std::process::Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "initial"])
-            .current_dir(dir)
+        git_cmd(&["commit", "--allow-empty", "-m", "initial"], dir)
             .output()
             .expect("git commit failed");
     }
@@ -167,7 +170,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
         let repo = GitRepo::open(dir.path()).unwrap();
-        assert_eq!(repo.current_branch().unwrap(), "main");
+        assert_eq!(repo.current_branch().unwrap(), "master");
     }
 
     #[test]
@@ -188,14 +191,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
         // Set up tracking
-        std::process::Command::new("git")
-            .args(["config", "branch.main.remote", "origin"])
-            .current_dir(dir.path())
+        git_cmd(&["config", "branch.master.remote", "origin"], dir.path())
             .output()
             .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "branch.main.merge", "refs/heads/develop"])
-            .current_dir(dir.path())
+        git_cmd(&["config", "branch.master.merge", "refs/heads/develop"], dir.path())
             .output()
             .unwrap();
         let repo = GitRepo::open(dir.path()).unwrap();
@@ -217,9 +216,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
         // Detach HEAD
-        std::process::Command::new("git")
-            .args(["checkout", "--detach", "HEAD"])
-            .current_dir(dir.path())
+        git_cmd(&["checkout", "--detach", "HEAD"], dir.path())
             .output()
             .expect("git checkout --detach failed");
         let repo = GitRepo::open(dir.path()).unwrap();
@@ -231,7 +228,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path());
         let repo = GitRepo::open(dir.path()).unwrap();
-        assert_eq!(repo.current_branch_or_default("master"), "main");
+        assert_eq!(repo.current_branch_or_default("master"), "master");
     }
 
     #[test]

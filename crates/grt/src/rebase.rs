@@ -90,62 +90,50 @@ mod tests {
     use super::*;
     use std::process::Command;
 
+    /// Run a git command in the test directory, isolated from user/global config.
+    fn git_cmd(args: &[&str], dir: &Path) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
+        cmd
+    }
+
     fn init_repo_with_remote(dir: &Path) -> tempfile::TempDir {
         // Create a "remote" bare repo
         let remote_dir = tempfile::tempdir().unwrap();
-        Command::new("git")
-            .args(["init", "--bare"])
-            .current_dir(remote_dir.path())
+        git_cmd(&["init", "--bare"], remote_dir.path())
             .output()
             .expect("git init --bare failed");
 
         // Init the working repo
-        Command::new("git")
-            .args(["init", "--initial-branch=main"])
-            .current_dir(dir)
+        git_cmd(&["init", "--initial-branch=master"], dir)
             .output()
             .expect("git init failed");
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir)
+        git_cmd(&["config", "user.email", "test@test.com"], dir)
             .output()
             .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir)
+        git_cmd(&["config", "user.name", "Test"], dir)
             .output()
             .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "initial"])
-            .current_dir(dir)
+        git_cmd(&["commit", "--allow-empty", "-m", "initial"], dir)
             .output()
             .unwrap();
 
         // Add remote
-        Command::new("git")
-            .args([
-                "remote",
-                "add",
-                "gerrit",
-                remote_dir.path().to_str().unwrap(),
-            ])
-            .current_dir(dir)
-            .output()
-            .unwrap();
+        git_cmd(
+            &["remote", "add", "gerrit", remote_dir.path().to_str().unwrap()],
+            dir,
+        )
+        .output()
+        .unwrap();
 
         // Push to create remote branch
-        Command::new("git")
-            .args(["push", "gerrit", "main"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
+        git_cmd(&["push", "gerrit", "master"], dir).output().unwrap();
 
         // Fetch to populate remote tracking refs
-        Command::new("git")
-            .args(["fetch", "gerrit"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
+        git_cmd(&["fetch", "gerrit"], dir).output().unwrap();
 
         remote_dir
     }
@@ -153,30 +141,22 @@ mod tests {
     #[test]
     fn rebase_skipped_when_no_remote_branch() {
         let dir = tempfile::tempdir().unwrap();
-        Command::new("git")
-            .args(["init", "--initial-branch=main"])
-            .current_dir(dir.path())
+        git_cmd(&["init", "--initial-branch=master"], dir.path())
             .output()
             .unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
+        git_cmd(&["config", "user.email", "test@test.com"], dir.path())
             .output()
             .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
+        git_cmd(&["config", "user.name", "Test"], dir.path())
             .output()
             .unwrap();
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "initial"])
-            .current_dir(dir.path())
+        git_cmd(&["commit", "--allow-empty", "-m", "initial"], dir.path())
             .output()
             .unwrap();
 
         // No remote exists, so rebase should be skipped
         // git_remote_update will fail, which is OK — rebase_changes handles it
-        let result = rebase_changes("nonexistent", "main", false, dir.path());
+        let result = rebase_changes("nonexistent", "master", false, dir.path());
         // Should error on remote update since remote doesn't exist
         assert!(result.is_err() || matches!(result.unwrap(), RebaseResult::Skipped));
     }
@@ -187,13 +167,11 @@ mod tests {
         let _remote = init_repo_with_remote(dir.path());
 
         // Add a local commit
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "local change"])
-            .current_dir(dir.path())
+        git_cmd(&["commit", "--allow-empty", "-m", "local change"], dir.path())
             .output()
             .unwrap();
 
-        let result = rebase_changes("gerrit", "main", false, dir.path()).unwrap();
+        let result = rebase_changes("gerrit", "master", false, dir.path()).unwrap();
         assert!(
             matches!(result, RebaseResult::Success { .. }),
             "expected Success, got {result:?}"
@@ -208,9 +186,7 @@ mod tests {
         let orig_head = subprocess::git_rev_parse_head(dir.path()).unwrap();
 
         // Make a new commit
-        Command::new("git")
-            .args(["commit", "--allow-empty", "-m", "new"])
-            .current_dir(dir.path())
+        git_cmd(&["commit", "--allow-empty", "-m", "new"], dir.path())
             .output()
             .unwrap();
 

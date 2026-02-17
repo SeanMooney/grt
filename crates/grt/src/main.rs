@@ -617,7 +617,7 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
         }
     }
 
-    // Pre-push rebase
+    // Pre-push rebase (test rebase to detect conflicts)
     let should_rebase = !args.no_rebase && (app.config.default_rebase || args.force_rebase);
     let rebase_orig_head = if should_rebase {
         match rebase::rebase_changes(&remote, &branch, args.keep_rebase, &root)? {
@@ -628,6 +628,15 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     } else {
         None
     };
+
+    // Undo rebase BEFORE push (unless --force-rebase) so we push original SHAs.
+    // This matches git-review's behavior: test rebase detects conflicts, but we
+    // push the original commits so unchanged commits don't get new patchsets.
+    if let Some(ref orig_head) = rebase_orig_head {
+        if !args.force_rebase {
+            rebase::undo_rebase(orig_head, &root)?;
+        }
+    }
 
     // Count unpushed commits
     let count = subprocess::count_unpushed_commits(&remote, &branch, &root)?;
@@ -717,13 +726,6 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
         }
         OutputFormat::Text => {
             eprintln!("Push successful.");
-        }
-    }
-
-    // Post-push: undo rebase unless force-rebase was requested
-    if let Some(ref orig_head) = rebase_orig_head {
-        if !args.force_rebase {
-            rebase::undo_rebase(orig_head, &root)?;
         }
     }
 
