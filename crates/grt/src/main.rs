@@ -234,9 +234,15 @@ struct CommentsArgs {
     #[arg(long)]
     project: Option<String>,
 
-    /// Age filter for cross-change search (e.g., 30d, 2w, 1y)
+    /// Show only comments no older than this age (e.g., 30d, 2w, 1m, 1y).
+    /// In cross-change search mode this is also passed to Gerrit as -age:<value>.
     #[arg(long)]
     age: Option<String>,
+
+    /// Show only comments at least this old (e.g., 30d, 2w).
+    /// Useful for finding stale unresolved threads.
+    #[arg(long)]
+    min_age: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -805,6 +811,20 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
     let mut app = App::new(work_dir, &cli_overrides)?;
     app.authenticate_and_verify().await?;
 
+    // Resolve --age / --max-age into YYYY-MM-DD date bounds used by both modes.
+    // --age N   → keep threads newer than N ago  → `after` lower bound
+    // --max-age N → keep threads older than N ago → `before` upper bound
+    let age_after: Option<String> = args
+        .age
+        .as_deref()
+        .map(parse_age_to_date)
+        .transpose()?;
+    let age_before: Option<String> = args
+        .min_age
+        .as_deref()
+        .map(parse_age_to_date)
+        .transpose()?;
+
     // Search mode: no change given, but --project or --age provided
     let search_mode = args.change.is_none()
         && (args.project.is_some() || args.age.is_some());
@@ -859,11 +879,9 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
             if args.has_replies {
                 comments::filter_threads_has_replies(&mut threads);
             }
-            comments::filter_threads_by_date(
-                &mut threads,
-                args.after.as_deref(),
-                args.before.as_deref(),
-            );
+            let after = args.after.as_deref().or(age_after.as_deref());
+            let before = args.before.as_deref().or(age_before.as_deref());
+            comments::filter_threads_by_date(&mut threads, after, before);
 
             // Label filter
             if let Some(ref label_arg) = args.label {
@@ -948,11 +966,9 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
     if args.has_replies {
         comments::filter_threads_has_replies(&mut threads);
     }
-    comments::filter_threads_by_date(
-        &mut threads,
-        args.after.as_deref(),
-        args.before.as_deref(),
-    );
+    let after = args.after.as_deref().or(age_after.as_deref());
+    let before = args.before.as_deref().or(age_before.as_deref());
+    comments::filter_threads_by_date(&mut threads, after, before);
 
     // Label filter
     if let Some(ref label_arg) = args.label {
@@ -992,6 +1008,63 @@ fn setup_scheme(_ssh: bool, http: bool) -> &'static str {
 /// SSH-only setup skips REST API calls to avoid prompting for HTTPS credentials.
 fn setup_needs_http_check(scheme: &str) -> bool {
     scheme != "ssh"
+}
+
+/// Parse an age string like "1d", "2w", "3m", "1y" into a YYYY-MM-DD date
+/// representing that many days/weeks/months/years before today.
+///
+/// Returned date can be used as an `after` or `before` bound with
+/// `filter_threads_by_date`.
+fn parse_age_to_date(age: &str) -> Result<String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let (count_str, unit) = age
+        .find(|c: char| c.is_alphabetic())
+        .map(|i| (&age[..i], &age[i..]))
+        .context("age must be a number followed by a unit (d, w, m, y)")?;
+    let count: u64 = count_str
+        .parse()
+        .context("age count must be a positive integer")?;
+    if count == 0 {
+        anyhow::bail!("age count must be greater than zero");
+    }
+
+    let days: u64 = match unit {
+        "d" => count,
+        "w" => count * 7,
+        "m" => count * 30,
+        "y" => count * 365,
+        other => anyhow::bail!("unknown age unit '{}'; use d, w, m, or y", other),
+    };
+
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system time before Unix epoch")?
+        .as_secs();
+    let cutoff_secs = now_secs.saturating_sub(days * 86_400);
+
+    // Convert epoch seconds to YYYY-MM-DD without external deps
+    let date = epoch_secs_to_date(cutoff_secs);
+    Ok(date)
+}
+
+/// Convert Unix epoch seconds to a "YYYY-MM-DD" string using the proleptic
+/// Gregorian calendar.  Accurate for dates in the range 1970–9999.
+fn epoch_secs_to_date(secs: u64) -> String {
+    let days_since_epoch = secs / 86_400;
+    // Algorithm from http://howardhinnant.github.io/date_algorithms.html
+    // civil_from_days (public domain)
+    let z = days_since_epoch as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
 /// Parse a label filter like "Code-Review=-1" and retain only threads
@@ -1689,5 +1762,98 @@ mod tests {
         let scheme = setup_scheme(false, true);
         assert_eq!(scheme, "https");
         assert!(setup_needs_http_check(scheme));
+    }
+
+    // === age semantics: --age = max age (≤ N old), --min-age = min age (≥ N old) ===
+
+    #[test]
+    fn age_flag_is_after_bound() {
+        // --age 1d → cutoff = yesterday; keep threads newer than or equal to that date
+        let cutoff = parse_age_to_date("1d").unwrap();
+        let mut threads = vec![comments::CommentThread {
+            file: "f".into(),
+            line: None,
+            resolved: false,
+            comments: vec![comments::ThreadComment {
+                author: "A".into(),
+                author_email: None,
+                account_id: None,
+                patch_set: None,
+                date: format!("{} 00:00:00.000000000", cutoff),
+                message: "msg".into(),
+            }],
+        }];
+        comments::filter_threads_by_date(&mut threads, Some(&cutoff), None);
+        assert_eq!(threads.len(), 1, "--age boundary date should be kept");
+    }
+
+    // === epoch_secs_to_date ===
+
+    #[test]
+    fn epoch_secs_to_date_unix_epoch() {
+        assert_eq!(epoch_secs_to_date(0), "1970-01-01");
+    }
+
+    #[test]
+    fn epoch_secs_to_date_known_date() {
+        // 2025-01-01 00:00:00 UTC = 1735689600
+        assert_eq!(epoch_secs_to_date(1_735_689_600), "2025-01-01");
+    }
+
+    #[test]
+    fn epoch_secs_to_date_leap_day() {
+        // 2024-02-29 00:00:00 UTC = 1709164800
+        assert_eq!(epoch_secs_to_date(1_709_164_800), "2024-02-29");
+    }
+
+    // === parse_age_to_date ===
+
+    #[test]
+    fn parse_age_days() {
+        // Just verify the function doesn't error and returns a plausible date string
+        let date = parse_age_to_date("7d").unwrap();
+        assert_eq!(date.len(), 10);
+        assert!(date.starts_with("20"));
+    }
+
+    #[test]
+    fn parse_age_weeks() {
+        let date = parse_age_to_date("2w").unwrap();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[test]
+    fn parse_age_months() {
+        let date = parse_age_to_date("1m").unwrap();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[test]
+    fn parse_age_years() {
+        let date = parse_age_to_date("1y").unwrap();
+        assert_eq!(date.len(), 10);
+    }
+
+    #[test]
+    fn parse_age_invalid_unit() {
+        assert!(parse_age_to_date("5x").is_err());
+    }
+
+    #[test]
+    fn parse_age_zero_count() {
+        assert!(parse_age_to_date("0d").is_err());
+    }
+
+    #[test]
+    fn parse_age_no_unit() {
+        assert!(parse_age_to_date("30").is_err());
+    }
+
+    #[test]
+    fn parse_age_days_older_than_weeks() {
+        // 30d should produce an earlier date than 1d
+        let date_30d = parse_age_to_date("30d").unwrap();
+        let date_1d = parse_age_to_date("1d").unwrap();
+        assert!(date_30d < date_1d, "30d cutoff should be earlier than 1d cutoff");
     }
 }
