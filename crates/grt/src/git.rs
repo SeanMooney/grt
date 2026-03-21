@@ -194,9 +194,12 @@ mod tests {
         git_cmd(&["config", "branch.master.remote", "origin"], dir.path())
             .output()
             .unwrap();
-        git_cmd(&["config", "branch.master.merge", "refs/heads/develop"], dir.path())
-            .output()
-            .unwrap();
+        git_cmd(
+            &["config", "branch.master.merge", "refs/heads/develop"],
+            dir.path(),
+        )
+        .output()
+        .unwrap();
         let repo = GitRepo::open(dir.path()).unwrap();
         let result = repo.upstream_branch().unwrap();
         assert_eq!(result, Some(("origin".into(), "develop".into())));

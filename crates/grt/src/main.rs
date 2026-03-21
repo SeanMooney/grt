@@ -462,7 +462,9 @@ async fn main() {
             let server = cli.server.clone();
             let color = resolve_color_remote(cli.no_color, None);
             match cli.command {
-                Commands::Review(args) => cmd_review(&work_dir, args, insecure, server, Some(color)).await,
+                Commands::Review(args) => {
+                    cmd_review(&work_dir, args, insecure, server, Some(color)).await
+                }
                 Commands::Push(args) => {
                     let mut push_args = args;
                     push_args.color_remote = Some(color);
@@ -596,7 +598,10 @@ async fn cmd_review(
 
     // Capture current branch name for --finish (only when not dry-run) (Task B2)
     let current_branch_name = if args.finish && !args.dry_run {
-        Some(app.require_git()?.current_branch_or_default(&app.config.branch))
+        Some(
+            app.require_git()?
+                .current_branch_or_default(&app.config.branch),
+        )
     } else {
         None
     };
@@ -605,7 +610,9 @@ async fn cmd_review(
     let topic = if args.no_topic {
         None
     } else {
-        args.topic.clone().or_else(|| app.git.as_ref()?.current_branch().ok())
+        args.topic
+            .clone()
+            .or_else(|| app.git.as_ref()?.current_branch().ok())
     };
 
     // Default mode: push
@@ -657,7 +664,12 @@ async fn cmd_review(
     Ok(())
 }
 
-async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool, server: Option<String>) -> Result<()> {
+async fn cmd_push(
+    work_dir: &Path,
+    args: PushArgs,
+    insecure: bool,
+    server: Option<String>,
+) -> Result<()> {
     let cli_overrides = CliOverrides {
         host: server,
         remote: args.remote.clone(),
@@ -817,7 +829,12 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool, server: Optio
     Ok(())
 }
 
-async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool, server: Option<String>) -> Result<()> {
+async fn cmd_comments(
+    work_dir: &Path,
+    args: CommentsArgs,
+    insecure: bool,
+    server: Option<String>,
+) -> Result<()> {
     let cli_overrides = CliOverrides {
         host: server,
         project: args.project.clone(),
@@ -830,27 +847,13 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool, serve
     // Resolve --age / --max-age into YYYY-MM-DD date bounds used by both modes.
     // --age N   → keep threads newer than N ago  → `after` lower bound
     // --max-age N → keep threads older than N ago → `before` upper bound
-    let age_after: Option<String> = args
-        .age
-        .as_deref()
-        .map(parse_age_to_date)
-        .transpose()?;
-    let age_before: Option<String> = args
-        .min_age
-        .as_deref()
-        .map(parse_age_to_date)
-        .transpose()?;
+    let age_after: Option<String> = args.age.as_deref().map(parse_age_to_date).transpose()?;
+    let age_before: Option<String> = args.min_age.as_deref().map(parse_age_to_date).transpose()?;
 
     // Search mode: no change given, but --project or --age provided
-    let search_mode = args.change.is_none()
-        && (args.project.is_some() || args.age.is_some());
+    let search_mode = args.change.is_none() && (args.project.is_some() || args.age.is_some());
 
     if search_mode {
-        // Require at least one server-side filter
-        if args.project.is_none() && args.age.is_none() {
-            anyhow::bail!("cross-change search requires --project and/or --age");
-        }
-
         let mut query_parts = Vec::new();
         if let Some(ref proj) = args.project {
             query_parts.push(format!("project:{proj}"));
@@ -931,13 +934,15 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool, serve
             let messages = change_detail.messages.as_deref().unwrap_or(&[]);
             match args.format {
                 OutputFormat::Json => {
-                    let json = comments::format_json(&change_detail, messages, &threads, &gerrit_url);
+                    let json =
+                        comments::format_json(&change_detail, messages, &threads, &gerrit_url);
                     if let Ok(output) = serde_json::from_value(json) {
                         outputs.push(output);
                     }
                 }
                 OutputFormat::Text => {
-                    let text = comments::format_text(&change_detail, messages, &threads, &gerrit_url);
+                    let text =
+                        comments::format_text(&change_detail, messages, &threads, &gerrit_url);
                     print!("{text}");
                     println!("\n---\n");
                 }
@@ -1034,7 +1039,11 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool, serve
 /// SSH is the default and is used whenever `--http` is not passed.
 /// `--ssh` is accepted for explicitness but has the same effect as omitting both flags.
 fn setup_scheme(_ssh: bool, http: bool) -> &'static str {
-    if http { "https" } else { "ssh" }
+    if http {
+        "https"
+    } else {
+        "ssh"
+    }
 }
 
 /// Return true when setup should run HTTP connectivity and auth checks.
@@ -1128,18 +1137,24 @@ fn apply_label_filter(
         })
         .unwrap_or_default();
 
-    if !voter_ids.is_empty() {
-        threads.retain(|t| {
-            t.comments
-                .iter()
-                .any(|c| c.account_id.map(|id| voter_ids.contains(&id)).unwrap_or(false))
-        });
-    }
+    threads.retain(|t| {
+        !voter_ids.is_empty()
+            && t.comments.iter().any(|c| {
+                c.account_id
+                    .map(|id| voter_ids.contains(&id))
+                    .unwrap_or(false)
+            })
+    });
 
     Ok(())
 }
 
-async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool, server: Option<String>) -> Result<()> {
+async fn cmd_setup(
+    work_dir: &Path,
+    args: SetupArgs,
+    insecure: bool,
+    server: Option<String>,
+) -> Result<()> {
     let scheme = Some(setup_scheme(args.ssh, args.http).to_string());
 
     let cli_overrides = CliOverrides {
@@ -1328,6 +1343,16 @@ mod tests {
         } else {
             panic!("expected Comments command");
         }
+    }
+
+    #[test]
+    fn resolved_and_unresolved_are_mutually_exclusive() {
+        let result =
+            Cli::try_parse_from(["grt", "comments", "12345", "--resolved", "--unresolved"]);
+        assert!(
+            result.is_err(),
+            "--resolved and --unresolved should conflict"
+        );
     }
 
     #[test]
@@ -1899,6 +1924,9 @@ mod tests {
         // 30d should produce an earlier date than 1d
         let date_30d = parse_age_to_date("30d").unwrap();
         let date_1d = parse_age_to_date("1d").unwrap();
-        assert!(date_30d < date_1d, "30d cutoff should be earlier than 1d cutoff");
+        assert!(
+            date_30d < date_1d,
+            "30d cutoff should be earlier than 1d cutoff"
+        );
     }
 }

@@ -94,9 +94,9 @@ impl App {
 
     /// Return the git repo, or fail with a helpful error for commands that require one.
     pub fn require_git(&self) -> Result<&GitRepo> {
-        self.git
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("not in a git repo; this command requires a git repository"))
+        self.git.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("not in a git repo; this command requires a git repository")
+        })
     }
 
     /// Acquire credentials: try credentials.toml first, then git credential helper.

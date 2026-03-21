@@ -112,14 +112,16 @@ pub fn build_threads(comments_by_file: &HashMap<String, Vec<CommentInfo>>) -> Ve
 
         let comments: Vec<ThreadComment> = thread_comments
             .into_iter()
-            .map(|(author, email, account_id, ps, _unresolved, date, message)| ThreadComment {
-                author,
-                author_email: email,
-                account_id,
-                patch_set: ps,
-                date,
-                message,
-            })
+            .map(
+                |(author, email, account_id, ps, _unresolved, date, message)| ThreadComment {
+                    author,
+                    author_email: email,
+                    account_id,
+                    patch_set: ps,
+                    date,
+                    message,
+                },
+            )
             .collect();
 
         threads.push(CommentThread {
@@ -145,7 +147,15 @@ pub fn build_threads(comments_by_file: &HashMap<String, Vec<CommentInfo>>) -> Ve
 fn collect_thread(
     comment: &CommentInfo,
     children: &HashMap<&str, Vec<&CommentInfo>>,
-    result: &mut Vec<(String, Option<String>, Option<i64>, Option<i32>, bool, String, String)>,
+    result: &mut Vec<(
+        String,
+        Option<String>,
+        Option<i64>,
+        Option<i32>,
+        bool,
+        String,
+        String,
+    )>,
 ) {
     let author = comment
         .author
@@ -404,7 +414,11 @@ pub fn format_json_multi(outputs: &[CommentOutput]) -> serde_json::Value {
 
 /// Format multiple change comment outputs as text, separated by horizontal rules.
 pub fn format_text_multi(
-    changes: &[(&crate::gerrit::ChangeInfo, &[crate::gerrit::ChangeMessageInfo], &[CommentThread])],
+    changes: &[(
+        &crate::gerrit::ChangeInfo,
+        &[crate::gerrit::ChangeMessageInfo],
+        &[CommentThread],
+    )],
     gerrit_url: &str,
 ) -> String {
     changes
@@ -877,5 +891,32 @@ mod tests {
         filter_threads_has_replies(&mut threads);
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].comments.len(), 2);
+    }
+
+    #[test]
+    fn format_json_multi_wraps_in_changes_array() {
+        let outputs: Vec<CommentOutput> = vec![];
+        let val = format_json_multi(&outputs);
+        assert!(val.get("changes").is_some());
+        assert_eq!(val["changes"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn format_text_multi_joins_with_separator() {
+        let change = crate::gerrit::ChangeInfo {
+            subject: Some("Subject".into()),
+            number: Some(42),
+            ..Default::default()
+        };
+        let threads: Vec<CommentThread> = vec![];
+        let messages: Vec<crate::gerrit::ChangeMessageInfo> = vec![];
+        let result = format_text_multi(
+            &[
+                (&change, &messages, &threads),
+                (&change, &messages, &threads),
+            ],
+            "https://review.example.com",
+        );
+        assert!(result.contains("---"), "expected separator between changes");
     }
 }

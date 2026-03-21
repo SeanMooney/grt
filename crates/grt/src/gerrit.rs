@@ -397,7 +397,7 @@ pub struct AccountInfo {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct ChangeInfo {
     pub id: Option<String>,
     pub project: Option<String>,

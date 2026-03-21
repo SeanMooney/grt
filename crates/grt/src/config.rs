@@ -322,7 +322,16 @@ pub fn load_default_server(config_dir: &Path) -> Result<Option<String>> {
         .with_context(|| format!("reading {}", cred_path.display()))?;
     let creds: CredentialsFile =
         toml::from_str(&content).with_context(|| format!("parsing {}", cred_path.display()))?;
-    Ok(creds.server.into_iter().find(|s| s.default).map(|s| s.name))
+    let defaults: Vec<_> = creds.server.into_iter().filter(|s| s.default).collect();
+    if defaults.len() > 1 {
+        eprintln!(
+            "warning: {} entries in {} have `default = true`; using the first one ({})",
+            defaults.len(),
+            cred_path.display(),
+            defaults[0].name,
+        );
+    }
+    Ok(defaults.into_iter().next().map(|s| s.name))
 }
 
 /// Parse a `.gitreview` INI file. Expects a `[gerrit]` section with key=value pairs.

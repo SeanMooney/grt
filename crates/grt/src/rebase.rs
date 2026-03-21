@@ -123,14 +123,21 @@ mod tests {
 
         // Add remote
         git_cmd(
-            &["remote", "add", "gerrit", remote_dir.path().to_str().unwrap()],
+            &[
+                "remote",
+                "add",
+                "gerrit",
+                remote_dir.path().to_str().unwrap(),
+            ],
             dir,
         )
         .output()
         .unwrap();
 
         // Push to create remote branch
-        git_cmd(&["push", "gerrit", "master"], dir).output().unwrap();
+        git_cmd(&["push", "gerrit", "master"], dir)
+            .output()
+            .unwrap();
 
         // Fetch to populate remote tracking refs
         git_cmd(&["fetch", "gerrit"], dir).output().unwrap();
@@ -167,9 +174,12 @@ mod tests {
         let _remote = init_repo_with_remote(dir.path());
 
         // Add a local commit
-        git_cmd(&["commit", "--allow-empty", "-m", "local change"], dir.path())
-            .output()
-            .unwrap();
+        git_cmd(
+            &["commit", "--allow-empty", "-m", "local change"],
+            dir.path(),
+        )
+        .output()
+        .unwrap();
 
         let result = rebase_changes("gerrit", "master", false, dir.path()).unwrap();
         assert!(

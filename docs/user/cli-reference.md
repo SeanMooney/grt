@@ -21,6 +21,7 @@ Available before or after the subcommand:
 |------|-------|-------------|
 | `--verbose` | `-v` | Increase verbosity (repeatable: `-v` info, `-vv` debug, `-vvv` trace) |
 | `--directory <PATH>` | `-C` | Run as if started in `<PATH>` (like `git -C`) |
+| `--server <HOST>` | | Override the Gerrit host (takes precedence over `.gitreview` and credentials default) |
 | `--no-color` | | Disable colored output |
 | `--insecure` | | Allow sending credentials over plain HTTP (no TLS) |
 
@@ -143,21 +144,25 @@ Retrieve review comments from Gerrit.
 | Flag | Description |
 |------|-------------|
 | `--revision <REV>` | Patchset revision to show comments for |
-| `--unresolved` | Show only unresolved comments |
+| `--unresolved` | Show only unresolved comment threads |
+| `--resolved` | Show only resolved comment threads |
 | `--format <FMT>` | Output format: `text` (default) or `json` |
 | `--all-revisions` | Show comments from all revisions |
-| `--include-robot-comments` | Include automated/CI comments |
+| `--exclude-robot-comments` | Exclude automated/CI robot comments (included by default) |
 | `--comment-by <PATTERN>` | Filter threads by commenter (email, name, or username substring match) |
 | `--has-replies` | Only show threads with 2 or more comments (threads that received replies) |
 | `--label <NAME=VALUE>` | Filter threads by label vote (e.g., `Code-Review=-1`) |
 | `--after <YYYY-MM-DD>` | Filter comments posted after this date |
 | `--before <YYYY-MM-DD>` | Filter comments posted before this date |
+| `--age <DURATION>` | In cross-change search: Gerrit query window (which changes are fetched, e.g., `30d`, `2w`, `1y`). In single-change mode: filter comments by age. Uses Gerrit's native `-age:` operator. |
+| `--min-age <DURATION>` | Filter out comments newer than this duration (e.g., `7d`). Useful for finding stale unresolved threads. |
 | `--project <PROJECT>` | Project to search; enables cross-change search mode when no change is given |
-| `--age <DURATION>` | Age filter for cross-change search (e.g., `30d`, `2w`, `1y`); uses Gerrit's native `-age:` operator |
 
 #### Cross-change search mode
 
 When no `<change>` is given and `--project` or `--age` is provided, grt queries multiple changes matching the filters and aggregates results. At least one of `--project` or `--age` must be specified. In JSON format the output is a single object with a `"changes"` array.
+
+**Age semantics in search mode:** `--age` drives the Gerrit query window (controls which changes are fetched from the server). `--after`/`--before` filter individual comments within those fetched changes. For example, `--age 30d --after 2025-01-01` fetches changes modified in the last 30 days, then keeps only comments posted after 2025-01-01.
 
 Example:
 
@@ -214,3 +219,4 @@ The following flag pairs are mutually exclusive and cannot be used together:
 - **WIP:** `--wip` / `--ready`
 - **Privacy:** `--private` / `--remove-private`
 - **Mode flags:** `-d`, `-x`, `-X`, `-N`, `-m`, `-l`, `-s` — only one may be used at a time
+- **Comments filter:** `--resolved` / `--unresolved`
