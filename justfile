@@ -42,6 +42,23 @@ setup-hooks:
     pre-commit install
     pre-commit install --hook-type commit-msg
 
+# Cut a release: tag, publish to crates.io, and create GitHub release
+release:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*= *"//' | sed 's/".*//')
+    echo "Releasing v${VERSION}..."
+    cargo release "${VERSION}" --execute
+    just build-release
+    sha256sum target/release/grt > target/release/SHA256SUMS
+    NOTES=$(awk "/## \[${VERSION}\]/{found=1; next} found && /^## \[/{exit} found{print}" CHANGELOG.md)
+    gh release create "v${VERSION}" \
+      --title "grt v${VERSION}" \
+      --notes "${NOTES}" \
+      target/release/grt \
+      target/release/SHA256SUMS
+    echo "Released v${VERSION}"
+
 # Remove build artifacts
 clean:
     cargo clean

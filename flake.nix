@@ -57,6 +57,7 @@
             toolchain
             cargo-deny
             cargo-nextest
+            cargo-release
             just
             pre-commit
           ];
