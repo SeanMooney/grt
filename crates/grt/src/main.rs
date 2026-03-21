@@ -988,6 +988,12 @@ fn setup_scheme(_ssh: bool, http: bool) -> &'static str {
     if http { "https" } else { "ssh" }
 }
 
+/// Return true when setup should run HTTP connectivity and auth checks.
+/// SSH-only setup skips REST API calls to avoid prompting for HTTPS credentials.
+fn setup_needs_http_check(scheme: &str) -> bool {
+    scheme != "ssh"
+}
+
 /// Parse a label filter like "Code-Review=-1" and retain only threads
 /// where at least one commenter's account_id voted that label value.
 fn apply_label_filter(
@@ -1076,44 +1082,47 @@ async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<(
         Err(_) => eprintln!("  remote '{remote}': NOT FOUND"),
     }
 
-    // 3. Test connectivity and auth
-    eprintln!("  Gerrit host: {}", app.config.host);
-    match app.gerrit.get_version().await {
-        Ok(version) => {
-            eprintln!("  connectivity: OK (Gerrit {version})");
-        }
-        Err(e) => {
-            eprintln!("  connectivity: FAILED ({e})");
-            eprintln!("  Trying with authentication...");
-            if app.authenticate().is_ok() {
-                match app.gerrit.get_version().await {
-                    Ok(version) => {
-                        eprintln!("  connectivity: OK (Gerrit {version}, authenticated)")
+    // 3. Test connectivity and auth (HTTP/HTTPS only — skip for SSH-only setup)
+    let use_http = setup_needs_http_check(&app.config.scheme);
+    if use_http {
+        eprintln!("  Gerrit host: {}", app.config.host);
+        match app.gerrit.get_version().await {
+            Ok(version) => {
+                eprintln!("  connectivity: OK (Gerrit {version})");
+            }
+            Err(e) => {
+                eprintln!("  connectivity: FAILED ({e})");
+                eprintln!("  Trying with authentication...");
+                if app.authenticate().is_ok() {
+                    match app.gerrit.get_version().await {
+                        Ok(version) => {
+                            eprintln!("  connectivity: OK (Gerrit {version}, authenticated)")
+                        }
+                        Err(e) => eprintln!("  connectivity: FAILED with auth ({e})"),
                     }
-                    Err(e) => eprintln!("  connectivity: FAILED with auth ({e})"),
+                } else {
+                    eprintln!("  authentication: FAILED (check git credentials)");
                 }
-            } else {
-                eprintln!("  authentication: FAILED (check git credentials)");
             }
         }
-    }
 
-    // 4. Verify auth
-    match app.gerrit.get_self_account().await {
-        Ok(account) => {
-            let name = account.name.as_deref().unwrap_or("unknown");
-            let email = account.email.as_deref().unwrap_or("unknown");
-            eprintln!("  authenticated as: {name} <{email}>");
-        }
-        Err(_) => {
-            if app.authenticate().is_ok() {
-                match app.gerrit.get_self_account().await {
-                    Ok(account) => {
-                        let name = account.name.as_deref().unwrap_or("unknown");
-                        let email = account.email.as_deref().unwrap_or("unknown");
-                        eprintln!("  authenticated as: {name} <{email}>");
+        // 4. Verify auth
+        match app.gerrit.get_self_account().await {
+            Ok(account) => {
+                let name = account.name.as_deref().unwrap_or("unknown");
+                let email = account.email.as_deref().unwrap_or("unknown");
+                eprintln!("  authenticated as: {name} <{email}>");
+            }
+            Err(_) => {
+                if app.authenticate().is_ok() {
+                    match app.gerrit.get_self_account().await {
+                        Ok(account) => {
+                            let name = account.name.as_deref().unwrap_or("unknown");
+                            let email = account.email.as_deref().unwrap_or("unknown");
+                            eprintln!("  authenticated as: {name} <{email}>");
+                        }
+                        Err(e) => eprintln!("  auth check: FAILED ({e})"),
                     }
-                    Err(e) => eprintln!("  auth check: FAILED ({e})"),
                 }
             }
         }
@@ -1641,5 +1650,44 @@ mod tests {
         // clap should reject --ssh and --http together
         let result = Cli::try_parse_from(["grt", "setup", "--ssh", "--http"]);
         assert!(result.is_err(), "--ssh and --http should conflict");
+    }
+
+    // === setup_needs_http_check ===
+
+    #[test]
+    fn http_check_skipped_for_ssh_scheme() {
+        assert!(!setup_needs_http_check("ssh"));
+    }
+
+    #[test]
+    fn http_check_runs_for_https_scheme() {
+        assert!(setup_needs_http_check("https"));
+    }
+
+    #[test]
+    fn http_check_runs_for_http_scheme() {
+        assert!(setup_needs_http_check("http"));
+    }
+
+    #[test]
+    fn no_flag_setup_scheme_skips_http_check() {
+        // Default (no flags) must be SSH and must NOT trigger HTTP checks
+        let scheme = setup_scheme(false, false);
+        assert_eq!(scheme, "ssh");
+        assert!(!setup_needs_http_check(scheme));
+    }
+
+    #[test]
+    fn explicit_ssh_flag_skips_http_check() {
+        let scheme = setup_scheme(true, false);
+        assert_eq!(scheme, "ssh");
+        assert!(!setup_needs_http_check(scheme));
+    }
+
+    #[test]
+    fn http_flag_enables_http_check() {
+        let scheme = setup_scheme(false, true);
+        assert_eq!(scheme, "https");
+        assert!(setup_needs_http_check(scheme));
     }
 }
