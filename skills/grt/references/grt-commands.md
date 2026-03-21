@@ -132,6 +132,13 @@ Native push interface (subset of review flags).
 | `--format <FMT>` | `text` (default) or `json` |
 | `--all-revisions` | All patchsets |
 | `--include-robot-comments` | Include CI comments |
+| `--comment-by <PATTERN>` | Filter by commenter (email, name, or username substring) |
+| `--has-replies` | Only threads with 2+ comments (received replies) |
+| `--label <NAME=VALUE>` | Filter by label vote (e.g., `Code-Review=-1`) |
+| `--after <YYYY-MM-DD>` | Comments posted after this date |
+| `--before <YYYY-MM-DD>` | Comments posted before this date |
+| `--project <PROJECT>` | Project to search; enables cross-change search when no change given |
+| `--age <DURATION>` | Age filter for cross-change search (e.g., `30d`, `2w`, `1y`) |
 
 ## grt setup
 

@@ -134,6 +134,7 @@ mod tests {
             messages: None,
             insertions: None,
             deletions: None,
+            labels: None,
         }
     }
 

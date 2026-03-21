@@ -209,6 +209,34 @@ struct CommentsArgs {
     /// Include robot/automated comments
     #[arg(long)]
     include_robot_comments: bool,
+
+    /// Filter threads by commenter (email, name, or username substring match)
+    #[arg(long)]
+    comment_by: Option<String>,
+
+    /// Only show threads with 2+ comments (i.e., that received replies)
+    #[arg(long)]
+    has_replies: bool,
+
+    /// Filter threads by label vote (e.g., Code-Review=-1)
+    #[arg(long)]
+    label: Option<String>,
+
+    /// Filter comments posted after this date (YYYY-MM-DD)
+    #[arg(long)]
+    after: Option<String>,
+
+    /// Filter comments posted before this date (YYYY-MM-DD)
+    #[arg(long)]
+    before: Option<String>,
+
+    /// Project to search (enables cross-change search mode when no change is given)
+    #[arg(long)]
+    project: Option<String>,
+
+    /// Age filter for cross-change search (e.g., 30d, 2w, 1y)
+    #[arg(long)]
+    age: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -775,11 +803,106 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
         ..Default::default()
     };
     let mut app = App::new(work_dir, &cli_overrides)?;
-
-    // Authenticate for API access and verify credentials
     app.authenticate_and_verify().await?;
 
-    // Determine change identifier
+    // Search mode: no change given, but --project or --age provided
+    let search_mode = args.change.is_none()
+        && (args.project.is_some() || args.age.is_some());
+
+    if search_mode {
+        // Require at least one server-side filter
+        if args.project.is_none() && args.age.is_none() {
+            anyhow::bail!("cross-change search requires --project and/or --age");
+        }
+
+        let mut query_parts = Vec::new();
+        if let Some(ref proj) = args.project {
+            query_parts.push(format!("project:{proj}"));
+        }
+        if let Some(ref age) = args.age {
+            query_parts.push(format!("-age:{age}"));
+        }
+        // Add reviewer hint for server-side pre-filtering
+        if let Some(ref pat) = args.comment_by {
+            query_parts.push(format!("reviewer:{pat}"));
+        }
+        let query = query_parts.join(" ");
+
+        let changes = app.gerrit.query_changes(&query).await?;
+        let gerrit_url = app.config.gerrit_base_url()?.to_string();
+
+        let mut outputs: Vec<comments::CommentOutput> = Vec::new();
+
+        for change in &changes {
+            let change_id = match change.number {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+
+            let change_detail = app.gerrit.get_change_detail(&change_id).await?;
+            let change_comments = if let Some(ref rev) = change_detail.current_revision {
+                app.gerrit.get_revision_comments(&change_id, rev).await?
+            } else {
+                app.gerrit.get_change_comments(&change_id).await?
+            };
+
+            let mut all_comments = change_comments;
+
+            // Apply --comment-by filter on raw map
+            if let Some(ref pat) = args.comment_by {
+                comments::filter_by_author(&mut all_comments, pat);
+            }
+
+            let mut threads = comments::build_threads(&all_comments);
+
+            // Apply filters
+            if args.has_replies {
+                comments::filter_threads_has_replies(&mut threads);
+            }
+            comments::filter_threads_by_date(
+                &mut threads,
+                args.after.as_deref(),
+                args.before.as_deref(),
+            );
+
+            // Label filter
+            if let Some(ref label_arg) = args.label {
+                apply_label_filter(&change_detail, label_arg, &mut threads)?;
+            }
+
+            if args.unresolved {
+                threads.retain(|t| !t.resolved);
+            }
+
+            if threads.is_empty() && args.comment_by.is_some() {
+                continue; // skip changes with no matching comments
+            }
+
+            let messages = change_detail.messages.as_deref().unwrap_or(&[]);
+            match args.format {
+                OutputFormat::Json => {
+                    let json = comments::format_json(&change_detail, messages, &threads, &gerrit_url);
+                    if let Ok(output) = serde_json::from_value(json) {
+                        outputs.push(output);
+                    }
+                }
+                OutputFormat::Text => {
+                    let text = comments::format_text(&change_detail, messages, &threads, &gerrit_url);
+                    print!("{text}");
+                    println!("\n---\n");
+                }
+            }
+        }
+
+        if matches!(args.format, OutputFormat::Json) {
+            let multi = comments::format_json_multi(&outputs);
+            println!("{}", serde_json::to_string_pretty(&multi)?);
+        }
+
+        return Ok(());
+    }
+
+    // Single-change mode
     let change_id = match args.change {
         Some(id) => id,
         None => {
@@ -791,7 +914,6 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
 
     debug!("fetching comments for change: {}", change_id);
 
-    // Fetch change detail and comments
     let change = app.gerrit.get_change_detail(&change_id).await?;
     let change_comments = if args.all_revisions {
         app.gerrit.get_change_comments(&change_id).await?
@@ -807,18 +929,36 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
 
     let mut all_comments = change_comments;
 
-    // Optionally include robot comments
     if args.include_robot_comments {
         if let Ok(robot) = app.gerrit.get_robot_comments(&change_id).await {
-            for (file, comments) in robot {
-                all_comments.entry(file).or_default().extend(comments);
+            for (file, robot_comments) in robot {
+                all_comments.entry(file).or_default().extend(robot_comments);
             }
         }
     }
 
+    // Apply --comment-by filter on raw map (before build_threads)
+    if let Some(ref pat) = args.comment_by {
+        comments::filter_by_author(&mut all_comments, pat);
+    }
+
     let mut threads = comments::build_threads(&all_comments);
 
-    // Filter to unresolved only if requested
+    // Apply filters
+    if args.has_replies {
+        comments::filter_threads_has_replies(&mut threads);
+    }
+    comments::filter_threads_by_date(
+        &mut threads,
+        args.after.as_deref(),
+        args.before.as_deref(),
+    );
+
+    // Label filter
+    if let Some(ref label_arg) = args.label {
+        apply_label_filter(&change, label_arg, &mut threads)?;
+    }
+
     if args.unresolved {
         threads.retain(|t| !t.resolved);
     }
@@ -846,6 +986,45 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
 /// `--ssh` is accepted for explicitness but has the same effect as omitting both flags.
 fn setup_scheme(_ssh: bool, http: bool) -> &'static str {
     if http { "https" } else { "ssh" }
+}
+
+/// Parse a label filter like "Code-Review=-1" and retain only threads
+/// where at least one commenter's account_id voted that label value.
+fn apply_label_filter(
+    change: &grt::gerrit::ChangeInfo,
+    label_arg: &str,
+    threads: &mut Vec<grt::comments::CommentThread>,
+) -> Result<()> {
+    let (label_name, value_str) = label_arg
+        .split_once('=')
+        .context("--label must be in format 'LabelName=value' (e.g., Code-Review=-1)")?;
+    let target_value: i32 = value_str
+        .parse()
+        .context("label value must be an integer")?;
+
+    let voter_ids: std::collections::HashSet<i64> = change
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.get(label_name))
+        .and_then(|info| info.all.as_ref())
+        .map(|approvals| {
+            approvals
+                .iter()
+                .filter(|a| a.value == Some(target_value))
+                .filter_map(|a| a.account_id)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if !voter_ids.is_empty() {
+        threads.retain(|t| {
+            t.comments
+                .iter()
+                .any(|c| c.account_id.map(|id| voter_ids.contains(&id)).unwrap_or(false))
+        });
+    }
+
+    Ok(())
 }
 
 async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<()> {

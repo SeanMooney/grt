@@ -46,6 +46,20 @@ grt comments --include-robot-comments  # Include CI/automated comments
 
 For programmatic parsing, always use `--format json`. See `references/comment-json-schema.md` for the output schema.
 
+### Collecting AI review feedback
+
+Use cross-change search mode to aggregate comments across multiple changes in a project. When `--project` or `--age` is provided without a specific change, grt queries all matching changes and returns aggregated results.
+
+```bash
+grt comments --project openstack/nova --age 30d --comment-by ci@example.com --has-replies --format json
+```
+
+This returns a JSON object with a `"changes"` array, one entry per change. Additional filters:
+- `--comment-by <PATTERN>` — retain only threads where a commenter's name, email, or username matches the pattern
+- `--has-replies` — retain only threads that received at least one reply
+- `--label <NAME=VALUE>` — retain only threads by commenters who voted a specific label value (e.g., `Code-Review=-1`)
+- `--after`/`--before` — narrow to a date range (YYYY-MM-DD)
+
 ### Download a change
 
 ```bash

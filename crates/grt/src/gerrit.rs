@@ -241,7 +241,7 @@ impl GerritClient {
     /// Get detailed change information.
     pub async fn get_change_detail(&self, change_id: &str) -> Result<ChangeInfo> {
         let path = format!(
-            "/changes/{}/detail?o=CURRENT_REVISION&o=DETAILED_ACCOUNTS&o=MESSAGES",
+            "/changes/{}/detail?o=CURRENT_REVISION&o=DETAILED_ACCOUNTS&o=MESSAGES&o=LABELS",
             urlencoding::encode(change_id)
         );
         let body = self.get(&path).await?;
@@ -416,6 +416,7 @@ pub struct ChangeInfo {
     pub messages: Option<Vec<ChangeMessageInfo>>,
     pub insertions: Option<i64>,
     pub deletions: Option<i64>,
+    pub labels: Option<HashMap<String, LabelInfo>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -462,6 +463,21 @@ pub struct CommentRange {
     pub start_character: i32,
     pub end_line: i32,
     pub end_character: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LabelInfo {
+    pub all: Option<Vec<ApprovalInfo>>,
+    pub default_value: Option<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApprovalInfo {
+    #[serde(rename = "_account_id")]
+    pub account_id: Option<i64>,
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub value: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

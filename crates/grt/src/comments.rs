@@ -21,6 +21,8 @@ pub struct CommentThread {
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct ThreadComment {
     pub author: String,
+    pub author_email: Option<String>,
+    pub account_id: Option<i64>,
     pub patch_set: Option<i32>,
     pub date: String,
     pub message: String,
@@ -106,12 +108,14 @@ pub fn build_threads(comments_by_file: &HashMap<String, Vec<CommentInfo>>) -> Ve
         collect_thread(root, &children, &mut thread_comments);
 
         // Thread is resolved if the last comment has unresolved: false
-        let resolved = thread_comments.last().map(|c| !c.2).unwrap_or(false);
+        let resolved = thread_comments.last().map(|c| !c.4).unwrap_or(false);
 
         let comments: Vec<ThreadComment> = thread_comments
             .into_iter()
-            .map(|(author, ps, _unresolved, date, message)| ThreadComment {
+            .map(|(author, email, account_id, ps, _unresolved, date, message)| ThreadComment {
                 author,
+                author_email: email,
+                account_id,
                 patch_set: ps,
                 date,
                 message,
@@ -137,22 +141,25 @@ pub fn build_threads(comments_by_file: &HashMap<String, Vec<CommentInfo>>) -> Ve
 }
 
 /// Recursively collect comments in a thread, depth-first in chronological order.
+#[allow(clippy::type_complexity)]
 fn collect_thread(
     comment: &CommentInfo,
     children: &HashMap<&str, Vec<&CommentInfo>>,
-    result: &mut Vec<(String, Option<i32>, bool, String, String)>,
+    result: &mut Vec<(String, Option<String>, Option<i64>, Option<i32>, bool, String, String)>,
 ) {
     let author = comment
         .author
         .as_ref()
         .and_then(|a| a.name.clone())
         .unwrap_or_else(|| "Unknown".to_string());
+    let email = comment.author.as_ref().and_then(|a| a.email.clone());
+    let account_id = comment.author.as_ref().and_then(|a| a.account_id);
     let unresolved = comment.unresolved.unwrap_or(true);
     let date = comment.updated.clone().unwrap_or_default();
     let message = comment.message.clone().unwrap_or_default();
     let ps = comment.patch_set;
 
-    result.push((author, ps, unresolved, date, message));
+    result.push((author, email, account_id, ps, unresolved, date, message));
 
     if let Some(id) = &comment.id {
         if let Some(replies) = children.get(id.as_str()) {
@@ -341,6 +348,73 @@ pub fn format_json(
     };
 
     serde_json::to_value(output).unwrap_or_default()
+}
+
+/// Filter raw comment map to only include comments whose author matches `pattern`
+/// (case-insensitive substring of name, email, or username).
+pub fn filter_by_author(comments_by_file: &mut HashMap<String, Vec<CommentInfo>>, pattern: &str) {
+    let pat = pattern.to_lowercase();
+    for comments in comments_by_file.values_mut() {
+        comments.retain(|c| {
+            if let Some(ref a) = c.author {
+                let name_match = a.name.as_deref().unwrap_or("").to_lowercase().contains(&pat);
+                let email_match = a.email.as_deref().unwrap_or("").to_lowercase().contains(&pat);
+                let user_match = a.username.as_deref().unwrap_or("").to_lowercase().contains(&pat);
+                name_match || email_match || user_match
+            } else {
+                false
+            }
+        });
+    }
+    // Remove files with no comments left
+    comments_by_file.retain(|_, v| !v.is_empty());
+}
+
+/// Retain only threads that have 2 or more comments (i.e., received replies).
+pub fn filter_threads_has_replies(threads: &mut Vec<CommentThread>) {
+    threads.retain(|t| t.comments.len() >= 2);
+}
+
+/// Retain threads whose root comment date falls within [after, before].
+/// Dates are YYYY-MM-DD strings compared lexicographically against the
+/// date prefix of the comment's `updated` field ("YYYY-MM-DD HH:MM:SS...").
+pub fn filter_threads_by_date(
+    threads: &mut Vec<CommentThread>,
+    after: Option<&str>,
+    before: Option<&str>,
+) {
+    threads.retain(|t| {
+        let date = t.comments.first().map(|c| &c.date[..]).unwrap_or("");
+        let date_prefix = &date[..date.len().min(10)];
+        if let Some(a) = after {
+            if date_prefix < a {
+                return false;
+            }
+        }
+        if let Some(b) = before {
+            if date_prefix > b {
+                return false;
+            }
+        }
+        true
+    });
+}
+
+/// Format multiple change comment outputs as a JSON object with a "changes" array.
+pub fn format_json_multi(outputs: &[CommentOutput]) -> serde_json::Value {
+    serde_json::json!({"changes": outputs})
+}
+
+/// Format multiple change comment outputs as text, separated by horizontal rules.
+pub fn format_text_multi(
+    changes: &[(&crate::gerrit::ChangeInfo, &[crate::gerrit::ChangeMessageInfo], &[CommentThread])],
+    gerrit_url: &str,
+) -> String {
+    changes
+        .iter()
+        .map(|(change, messages, threads)| format_text(change, messages, threads, gerrit_url))
+        .collect::<Vec<_>>()
+        .join("\n---\n\n")
 }
 
 #[cfg(test)]
@@ -627,6 +701,7 @@ mod tests {
             messages: None,
             insertions: None,
             deletions: None,
+            labels: None,
         }
     }
 

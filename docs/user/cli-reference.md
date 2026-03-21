@@ -147,6 +147,23 @@ Retrieve review comments from Gerrit.
 | `--format <FMT>` | Output format: `text` (default) or `json` |
 | `--all-revisions` | Show comments from all revisions |
 | `--include-robot-comments` | Include automated/CI comments |
+| `--comment-by <PATTERN>` | Filter threads by commenter (email, name, or username substring match) |
+| `--has-replies` | Only show threads with 2 or more comments (threads that received replies) |
+| `--label <NAME=VALUE>` | Filter threads by label vote (e.g., `Code-Review=-1`) |
+| `--after <YYYY-MM-DD>` | Filter comments posted after this date |
+| `--before <YYYY-MM-DD>` | Filter comments posted before this date |
+| `--project <PROJECT>` | Project to search; enables cross-change search mode when no change is given |
+| `--age <DURATION>` | Age filter for cross-change search (e.g., `30d`, `2w`, `1y`); uses Gerrit's native `-age:` operator |
+
+#### Cross-change search mode
+
+When no `<change>` is given and `--project` or `--age` is provided, grt queries multiple changes matching the filters and aggregates results. At least one of `--project` or `--age` must be specified. In JSON format the output is a single object with a `"changes"` array.
+
+Example:
+
+```
+grt comments --project openstack/nova --age 30d --comment-by ci@example.com --has-replies --format json
+```
 
 ### grt setup
 

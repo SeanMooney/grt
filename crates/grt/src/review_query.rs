@@ -322,6 +322,7 @@ mod ssh {
             messages: None,
             insertions: None,
             deletions: None,
+            labels: None,
         }
     }
 
