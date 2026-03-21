@@ -840,11 +840,17 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
             query_parts.push(format!("project:{proj}"));
         }
         if let Some(ref age) = args.age {
+            // -age:N = changes active within the last N (newer than N ago)
             query_parts.push(format!("-age:{age}"));
         }
-        // Add reviewer hint for server-side pre-filtering
+        if let Some(ref min_age) = args.min_age {
+            // age:N = changes last modified more than N ago (older than N ago)
+            query_parts.push(format!("age:{min_age}"));
+        }
+        // Use commentby: for server-side pre-filtering — unlike reviewer: it matches
+        // anyone who has posted a comment, including CI bots that are not formal reviewers.
         if let Some(ref pat) = args.comment_by {
-            query_parts.push(format!("reviewer:{pat}"));
+            query_parts.push(format!("commentby:{pat}"));
         }
         let query = query_parts.join(" ");
 
@@ -860,13 +866,17 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
             };
 
             let change_detail = app.gerrit.get_change_detail(&change_id).await?;
-            let change_comments = if let Some(ref rev) = change_detail.current_revision {
-                app.gerrit.get_revision_comments(&change_id, rev).await?
-            } else {
-                app.gerrit.get_change_comments(&change_id).await?
-            };
+            // In search mode always fetch all revisions — a commenter may have
+            // reviewed an earlier patchset that is no longer the current one.
+            let mut all_comments = app.gerrit.get_change_comments(&change_id).await?;
 
-            let mut all_comments = change_comments;
+            // Always include robot comments in search mode: CI bots comment via
+            // the robot comments endpoint and would be invisible otherwise.
+            if let Ok(robot) = app.gerrit.get_robot_comments(&change_id).await {
+                for (file, rc) in robot {
+                    all_comments.entry(file).or_default().extend(rc);
+                }
+            }
 
             // Apply --comment-by filter on raw map
             if let Some(ref pat) = args.comment_by {
@@ -875,13 +885,18 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
 
             let mut threads = comments::build_threads(&all_comments);
 
-            // Apply filters
+            // Apply filters.
+            // In search mode --age drives the Gerrit query (change activity window),
+            // so do NOT apply it as a per-comment date filter here.  Use explicit
+            // --after / --before for per-comment date filtering in search mode.
             if args.has_replies {
                 comments::filter_threads_has_replies(&mut threads);
             }
-            let after = args.after.as_deref().or(age_after.as_deref());
-            let before = args.before.as_deref().or(age_before.as_deref());
-            comments::filter_threads_by_date(&mut threads, after, before);
+            comments::filter_threads_by_date(
+                &mut threads,
+                args.after.as_deref(),
+                args.before.as_deref(),
+            );
 
             // Label filter
             if let Some(ref label_arg) = args.label {
@@ -892,8 +907,8 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
                 threads.retain(|t| !t.resolved);
             }
 
-            if threads.is_empty() && args.comment_by.is_some() {
-                continue; // skip changes with no matching comments
+            if threads.is_empty() {
+                continue; // all threads filtered out for this change
             }
 
             let messages = change_detail.messages.as_deref().unwrap_or(&[]);
