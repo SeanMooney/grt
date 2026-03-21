@@ -927,12 +927,11 @@ The `justfile` provides short recipes for common local operations:
 
 ```
 just build          # cargo build for the host target
-just build-static   # cargo build --target x86_64-unknown-linux-musl
-just test           # cargo nextest run --workspace
+just build-release  # cargo build --release for the host target
+just test           # cargo test --workspace
 just lint           # fmt check + clippy + cargo deny check
-just audit          # cargo audit (standalone RustSec advisory check)
-just sbom           # generate SBOMs locally into ./target/sbom/
-just release-dry    # cargo release --dry-run (preview version bump and changelog)
+just pre-release-checks  # fmt + clippy + cargo deny + tests (run by cargo-release hook)
+just release        # cut a release: cargo-release, build, sha256sum, gh release create
 ```
 
 Ansible playbooks invoke `cargo` and tools directly. The `justfile` is for developer
@@ -954,9 +953,19 @@ follow the same process and are always a separate commit from dependency updates
 
 ### Cutting a Release
 
-1. Ensure `CHANGELOG.md` has a complete entry under `[Unreleased]`
-2. Run `cargo release minor` (or `patch` or `major` as appropriate)
-3. `cargo-release` runs the pre-release checks, bumps all workspace crate versions, finalises
-   the changelog, commits, and pushes the version tag
-4. The Zuul `release` pipeline fires automatically on the pushed tag and handles all artifact
-   production and publication
+1. Ensure `CHANGELOG.md` has a complete entry under the next version heading (e.g. `## [0.1.0] — YYYY-MM-DD`)
+2. Bump `version` in `Cargo.toml` (workspace root) and run `cargo update -w` to sync `Cargo.lock`
+3. Run `just pre-release-checks` to confirm fmt, clippy, cargo-deny, and tests all pass
+4. Run `just release` — this:
+   - Calls `cargo release <version> --execute` (requires `cargo-release` to be installed; available via `nix develop`)
+   - Builds the release binary with `cargo build --workspace --release`
+   - Produces `target/release/SHA256SUMS` via `sha256sum`
+   - Creates the GitHub release with `gh release create`, uploading the binary and checksum
+
+**Prerequisites:** `cargo-release` and `gh` (GitHub CLI) must be available. In the Nix dev shell
+(`nix develop`) both are provided. Outside the dev shell, install with:
+
+```bash
+cargo install cargo-release
+# gh: https://cli.github.com
+```

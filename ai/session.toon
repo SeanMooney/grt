@@ -22,6 +22,7 @@ completed[21]{task,detail}:
   Phase 18: JSON Output & README,Root README.md created; Serialize added to 8 gerrit.rs API types; OutputFormat moved to review.rs; --format json wired to review -l (ChangeInfo array) review -d (DownloadResult) push (PushResult); SKILL.md updated with tips batch-workflow and JSON examples; grt-commands.md cli-reference.md updated with --format flag; manifest.toon and repo-layout.md updated
   Phase 19: git-review Port Complete,--use-pushurl wired via CliOverrides; --color/--no-color for git push; compare-mode rebase; removed --no-custom-script warning; cli-design divergences updated; ADR-0001
   Phase 20: Compare Mode Parsing,parse_compare_arg reworked: bare change (latest vs base) single PS (PS vs latest git-review compat) 0-PS (base vs PS) PS-PS range; same-patchset guards; docs updated
+  Phase 21: Release Infrastructure,Patched RUSTSEC-2026-0049 (rustls-webpki 0.103.9→0.103.10); added deny.toml skip entries for getrandom/windows-* duplicate major versions; fixed just release recipe (cd-path bug broke gh release create binary path); fixed Cargo.toml repository URL (smooney→SeanMooney); bumped to v0.0.2; cargo-release available via nix develop
 
 in_progress: Nothing
 
@@ -33,9 +34,9 @@ next_steps[4]:
 
 decisions_pending[0]:
 
-test_status: 317 tests passing (258 lib + 49 main + 10 integration)
-lint_status: cargo fmt clippy all pass clean
-last_session: Phase 18 — JSON structured output for list/download/push; root README.md; skill updates
+test_status: 277 lib + 76 main + 10 integration = 363 tests passing
+lint_status: cargo fmt clippy cargo-deny all pass clean
+last_session: Phase 21 — v0.0.1 release prep, security patch, v0.0.2 URL fix
 
 handoff_notes[23]:
   grt is now a drop-in git-review replacement via busybox argv[0] detection
