@@ -194,9 +194,13 @@ struct CommentsArgs {
     #[arg(long)]
     revision: Option<String>,
 
-    /// Show only unresolved comments
-    #[arg(long)]
+    /// Show only unresolved comment threads
+    #[arg(long, conflicts_with = "resolved")]
     unresolved: bool,
+
+    /// Show only resolved comment threads
+    #[arg(long, conflicts_with = "unresolved")]
+    resolved: bool,
 
     /// Output format
     #[arg(long, value_enum, default_value = "text")]
@@ -206,9 +210,9 @@ struct CommentsArgs {
     #[arg(long)]
     all_revisions: bool,
 
-    /// Include robot/automated comments
+    /// Exclude robot/automated comments
     #[arg(long)]
-    include_robot_comments: bool,
+    exclude_robot_comments: bool,
 
     /// Filter threads by commenter (email, name, or username substring match)
     #[arg(long)]
@@ -878,17 +882,15 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
                 }
             }
 
-            // Apply --comment-by filter on raw map
-            if let Some(ref pat) = args.comment_by {
-                comments::filter_by_author(&mut all_comments, pat);
-            }
-
             let mut threads = comments::build_threads(&all_comments);
 
             // Apply filters.
             // In search mode --age drives the Gerrit query (change activity window),
             // so do NOT apply it as a per-comment date filter here.  Use explicit
             // --after / --before for per-comment date filtering in search mode.
+            if let Some(ref pat) = args.comment_by {
+                comments::filter_threads_by_author(&mut threads, pat);
+            }
             if args.has_replies {
                 comments::filter_threads_has_replies(&mut threads);
             }
@@ -905,6 +907,9 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
 
             if args.unresolved {
                 threads.retain(|t| !t.resolved);
+            }
+            if args.resolved {
+                threads.retain(|t| t.resolved);
             }
 
             if threads.is_empty() {
@@ -962,7 +967,7 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
 
     let mut all_comments = change_comments;
 
-    if args.include_robot_comments {
+    if !args.exclude_robot_comments {
         if let Ok(robot) = app.gerrit.get_robot_comments(&change_id).await {
             for (file, robot_comments) in robot {
                 all_comments.entry(file).or_default().extend(robot_comments);
@@ -970,14 +975,12 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
         }
     }
 
-    // Apply --comment-by filter on raw map (before build_threads)
-    if let Some(ref pat) = args.comment_by {
-        comments::filter_by_author(&mut all_comments, pat);
-    }
-
     let mut threads = comments::build_threads(&all_comments);
 
     // Apply filters
+    if let Some(ref pat) = args.comment_by {
+        comments::filter_threads_by_author(&mut threads, pat);
+    }
     if args.has_replies {
         comments::filter_threads_has_replies(&mut threads);
     }
@@ -992,6 +995,9 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
 
     if args.unresolved {
         threads.retain(|t| !t.resolved);
+    }
+    if args.resolved {
+        threads.retain(|t| t.resolved);
     }
 
     let messages = change.messages.as_deref().unwrap_or(&[]);
@@ -1295,6 +1301,17 @@ mod tests {
             assert_eq!(args.change.as_deref(), Some("12345"));
             assert!(args.unresolved);
             assert!(matches!(args.format, OutputFormat::Json));
+        } else {
+            panic!("expected Comments command");
+        }
+    }
+
+    #[test]
+    fn parse_comments_resolved_flag() {
+        let cli = Cli::parse_from(["grt", "comments", "12345", "--resolved"]);
+        if let Commands::Comments(args) = cli.command {
+            assert!(args.resolved);
+            assert!(!args.unresolved);
         } else {
             panic!("expected Comments command");
         }

@@ -350,24 +350,21 @@ pub fn format_json(
     serde_json::to_value(output).unwrap_or_default()
 }
 
-/// Filter raw comment map to only include comments whose author matches `pattern`
-/// (case-insensitive substring of name, email, or username).
-pub fn filter_by_author(comments_by_file: &mut HashMap<String, Vec<CommentInfo>>, pattern: &str) {
+/// Retain threads where at least one comment's author matches `pattern`
+/// (case-insensitive substring of author name or email).
+/// The full thread is preserved when matched.
+pub fn filter_threads_by_author(threads: &mut Vec<CommentThread>, pattern: &str) {
     let pat = pattern.to_lowercase();
-    for comments in comments_by_file.values_mut() {
-        comments.retain(|c| {
-            if let Some(ref a) = c.author {
-                let name_match = a.name.as_deref().unwrap_or("").to_lowercase().contains(&pat);
-                let email_match = a.email.as_deref().unwrap_or("").to_lowercase().contains(&pat);
-                let user_match = a.username.as_deref().unwrap_or("").to_lowercase().contains(&pat);
-                name_match || email_match || user_match
-            } else {
-                false
-            }
-        });
-    }
-    // Remove files with no comments left
-    comments_by_file.retain(|_, v| !v.is_empty());
+    threads.retain(|t| {
+        t.comments.iter().any(|c| {
+            c.author.to_lowercase().contains(&pat)
+                || c.author_email
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_lowercase()
+                    .contains(&pat)
+        })
+    });
 }
 
 /// Retain only threads that have 2 or more comments (i.e., received replies).
@@ -428,6 +425,7 @@ mod tests {
             file: file.to_string(),
             line: Some(1),
             author: "Author".to_string(),
+            author_email: None,
             message: "Comment".to_string(),
             reply_to: None,
             unresolved: Some(true),
@@ -440,6 +438,7 @@ mod tests {
         file: String,
         line: Option<i32>,
         author: String,
+        author_email: Option<String>,
         message: String,
         reply_to: Option<String>,
         unresolved: Option<bool>,
@@ -457,6 +456,10 @@ mod tests {
         }
         fn author(mut self, a: &str) -> Self {
             self.author = a.to_string();
+            self
+        }
+        fn author_email(mut self, e: &str) -> Self {
+            self.author_email = Some(e.to_string());
             self
         }
         fn message(mut self, m: &str) -> Self {
@@ -494,7 +497,7 @@ mod tests {
                     author: Some(AccountInfo {
                         account_id: Some(1),
                         name: Some(self.author),
-                        email: None,
+                        email: self.author_email,
                         username: None,
                         display_name: None,
                     }),
@@ -783,5 +786,96 @@ mod tests {
         assert!(obj.contains_key("review_messages"));
         assert!(obj.contains_key("inline_comments"));
         assert!(obj.contains_key("summary"));
+    }
+
+    #[test]
+    fn filter_threads_by_author_matches_name() {
+        let items = vec![comment("c1", "f.rs").author("Alice").build()];
+        let mut threads = build_threads(&comments_map(items));
+        filter_threads_by_author(&mut threads, "alice");
+        assert_eq!(threads.len(), 1);
+    }
+
+    #[test]
+    fn filter_threads_by_author_matches_email() {
+        let items = vec![comment("c1", "f.rs")
+            .author("CI Bot")
+            .author_email("ci@seanmooney.info")
+            .build()];
+        let mut threads = build_threads(&comments_map(items));
+        filter_threads_by_author(&mut threads, "ci@seanmooney.info");
+        assert_eq!(threads.len(), 1);
+    }
+
+    #[test]
+    fn filter_threads_by_author_case_insensitive() {
+        let items = vec![comment("c1", "f.rs").author("Alice").build()];
+        let mut threads = build_threads(&comments_map(items));
+        filter_threads_by_author(&mut threads, "ALICE");
+        assert_eq!(threads.len(), 1);
+    }
+
+    #[test]
+    fn filter_threads_by_author_full_thread_preserved_when_matched() {
+        // Thread: root by "Alice", reply by CI bot — filter by "alice" keeps both
+        let items = vec![
+            comment("c1", "f.rs").author("Alice").build(),
+            comment("c2", "f.rs")
+                .author("CI Bot")
+                .author_email("ci@seanmooney.info")
+                .reply_to("c1")
+                .build(),
+        ];
+        let mut threads = build_threads(&comments_map(items));
+        filter_threads_by_author(&mut threads, "alice");
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comments.len(), 2);
+    }
+
+    #[test]
+    fn filter_threads_by_author_thread_dropped_when_no_match() {
+        let items = vec![comment("c1", "f.rs").author("Bob").build()];
+        let mut threads = build_threads(&comments_map(items));
+        filter_threads_by_author(&mut threads, "alice");
+        assert!(threads.is_empty());
+    }
+
+    #[test]
+    fn filter_threads_by_author_matches_reply_author() {
+        // Thread: root by "Bob", reply by CI bot — filter by CI email keeps thread
+        let items = vec![
+            comment("c1", "f.rs").author("Bob").build(),
+            comment("c2", "f.rs")
+                .author("CI Bot")
+                .author_email("ci@seanmooney.info")
+                .reply_to("c1")
+                .build(),
+        ];
+        let mut threads = build_threads(&comments_map(items));
+        filter_threads_by_author(&mut threads, "ci@seanmooney.info");
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comments.len(), 2);
+    }
+
+    #[test]
+    fn filter_threads_by_author_then_has_replies_regression() {
+        // Regression: root by "Alice" replied by CI bot. Filter by CI email should
+        // keep the full 2-comment thread, which then passes filter_threads_has_replies.
+        let items = vec![
+            comment("c1", "f.rs").author("Alice").build(),
+            comment("c2", "f.rs")
+                .author("CI Bot")
+                .author_email("ci@seanmooney.info")
+                .reply_to("c1")
+                .build(),
+            // Unrelated standalone thread by Alice
+            comment("c3", "other.rs").author("Alice").build(),
+        ];
+        let mut threads = build_threads(&comments_map(items));
+        filter_threads_by_author(&mut threads, "ci@seanmooney.info");
+        assert_eq!(threads.len(), 1);
+        filter_threads_has_replies(&mut threads);
+        assert_eq!(threads.len(), 1);
+        assert_eq!(threads[0].comments.len(), 2);
     }
 }
