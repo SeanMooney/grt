@@ -39,6 +39,10 @@ struct Cli {
     #[arg(long, global = true)]
     insecure: bool,
 
+    /// Override the Gerrit server host (overrides .gitreview, git config, and credentials default)
+    #[arg(long, global = true)]
+    server: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -383,7 +387,7 @@ fn prompt_for_username() -> Result<String> {
 /// - If remote doesn't exist and config has enough info: create it
 fn check_and_create_remote(app: &mut App) -> Result<()> {
     let remote = app.config.remote.clone();
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
 
     match subprocess::check_remote_exists(&remote, &root)? {
         Some(_url) => {
@@ -444,7 +448,7 @@ async fn main() {
 
             let work_dir = std::env::current_dir().expect("cannot determine current directory");
             let color = resolve_color_remote(cli.no_color, cli.color.as_deref());
-            cmd_review(&work_dir, cli.review, false, Some(color)).await
+            cmd_review(&work_dir, cli.review, false, None, Some(color)).await
         }
         Personality::Grt => {
             let cli = Cli::parse();
@@ -455,16 +459,17 @@ async fn main() {
             });
 
             let insecure = cli.insecure;
+            let server = cli.server.clone();
             let color = resolve_color_remote(cli.no_color, None);
             match cli.command {
-                Commands::Review(args) => cmd_review(&work_dir, args, insecure, Some(color)).await,
+                Commands::Review(args) => cmd_review(&work_dir, args, insecure, server, Some(color)).await,
                 Commands::Push(args) => {
                     let mut push_args = args;
                     push_args.color_remote = Some(color);
-                    cmd_push(&work_dir, push_args, insecure).await
+                    cmd_push(&work_dir, push_args, insecure, server).await
                 }
-                Commands::Comments(args) => cmd_comments(&work_dir, args, insecure).await,
-                Commands::Setup(args) => cmd_setup(&work_dir, args, insecure).await,
+                Commands::Comments(args) => cmd_comments(&work_dir, args, insecure, server).await,
+                Commands::Setup(args) => cmd_setup(&work_dir, args, insecure, server).await,
                 Commands::Export(args) => export::cmd_export(&args),
                 Commands::Version => cmd_version(&work_dir).await,
                 Commands::Completions { shell } => {
@@ -486,6 +491,7 @@ async fn cmd_review(
     work_dir: &Path,
     args: ReviewArgs,
     insecure: bool,
+    server: Option<String>,
     color_remote: Option<String>,
 ) -> Result<()> {
     // Setup mode: run setup, but continue if --finish is also set
@@ -500,6 +506,7 @@ async fn cmd_review(
                 http: false,
             },
             insecure,
+            server.clone(),
         )
         .await?;
         if !args.finish {
@@ -513,6 +520,7 @@ async fn cmd_review(
 
     // Create a single App instance for all mode dispatches
     let cli_overrides = CliOverrides {
+        host: server,
         remote: args.remote.clone(),
         use_pushurl: args.use_pushurl.then_some(true),
         insecure,
@@ -525,7 +533,7 @@ async fn cmd_review(
 
     // Resolve branch via --track if no explicit branch given (before all mode dispatches)
     let branch = if args.track && args.branch.is_none() {
-        match app.git.upstream_branch()? {
+        match app.require_git()?.upstream_branch()? {
             Some((_remote, merge_branch)) => {
                 tracing::debug!("--track resolved upstream branch to {}", merge_branch);
                 Some(merge_branch)
@@ -574,21 +582,21 @@ async fn cmd_review(
     // Pre-push: --update runs `git remote update`
     if args.update {
         let remote = args.remote.as_deref().unwrap_or(&app.config.remote);
-        let root = app.git.root()?;
+        let root = app.require_git()?.root()?;
         tracing::info!("Updating remote {remote}...");
         subprocess::git_remote_update(remote, &root)?;
     }
 
     // Pre-push: --new-changeid strips Change-Id and amends
     if args.new_changeid {
-        let root = app.git.root()?;
+        let root = app.require_git()?.root()?;
         tracing::info!("Regenerating Change-Id...");
         subprocess::git_regenerate_changeid(&root)?;
     }
 
     // Capture current branch name for --finish (only when not dry-run) (Task B2)
     let current_branch_name = if args.finish && !args.dry_run {
-        Some(app.git.current_branch_or_default(&app.config.branch))
+        Some(app.require_git()?.current_branch_or_default(&app.config.branch))
     } else {
         None
     };
@@ -597,7 +605,7 @@ async fn cmd_review(
     let topic = if args.no_topic {
         None
     } else {
-        args.topic.clone().or_else(|| app.git.current_branch().ok())
+        args.topic.clone().or_else(|| app.git.as_ref()?.current_branch().ok())
     };
 
     // Default mode: push
@@ -627,6 +635,7 @@ async fn cmd_review(
             color_remote: color_remote.clone(),
         },
         insecure,
+        None,
     )
     .await?;
 
@@ -634,7 +643,7 @@ async fn cmd_review(
     if let Some(topic_branch) = current_branch_name {
         if !args.dry_run {
             let default_branch = app.config.branch.clone();
-            let root = app.git.root()?;
+            let root = app.require_git()?.root()?;
             tracing::info!(
                 "Finishing: checking out {} and deleting {}...",
                 default_branch,
@@ -648,21 +657,22 @@ async fn cmd_review(
     Ok(())
 }
 
-async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()> {
+async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool, server: Option<String>) -> Result<()> {
     let cli_overrides = CliOverrides {
+        host: server,
         remote: args.remote.clone(),
         branch: args.branch.clone(),
         insecure,
         ..Default::default()
     };
     let mut app = App::new(work_dir, &cli_overrides)?;
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
 
     // Ensure remote exists (auto-create if possible)
     check_and_create_remote(&mut app)?;
 
     // Ensure commit-msg hook is installed
-    let hooks_dir = app.git.hooks_dir()?;
+    let hooks_dir = app.require_git()?.hooks_dir()?;
     hook::ensure_hook_installed(&hooks_dir)?;
     debug!("commit-msg hook verified at {:?}", hooks_dir);
 
@@ -675,9 +685,9 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     let remote = args.remote.unwrap_or_else(|| app.config.remote.clone());
 
     // Check Change-Id status with better error handling (Task M15)
-    let commit_msg = app.git.head_commit_message()?;
+    let commit_msg = app.require_git()?.head_commit_message()?;
     let hook_installed = app
-        .git
+        .require_git()?
         .hooks_dir()
         .map(|d| d.join("commit-msg").exists())
         .unwrap_or(false);
@@ -789,7 +799,7 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     match args.format {
         OutputFormat::Json => {
             // Re-read commit message to get Change-Id (may have been added by amend)
-            let commit_msg = app.git.head_commit_message().unwrap_or_default();
+            let commit_msg = app.require_git()?.head_commit_message().unwrap_or_default();
             let result = PushResult {
                 commits: count,
                 remote: remote.clone(),
@@ -807,8 +817,10 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
     Ok(())
 }
 
-async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Result<()> {
+async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool, server: Option<String>) -> Result<()> {
     let cli_overrides = CliOverrides {
+        host: server,
+        project: args.project.clone(),
         insecure,
         ..Default::default()
     };
@@ -944,7 +956,7 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
     let change_id = match args.change {
         Some(id) => id,
         None => {
-            let msg = app.git.head_commit_message()?;
+            let msg = app.require_git()?.head_commit_message()?;
             push::extract_change_id(&msg)
                 .context("no Change-Id found in HEAD commit. Specify a change number explicitly")?
         }
@@ -1127,22 +1139,23 @@ fn apply_label_filter(
     Ok(())
 }
 
-async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<()> {
+async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool, server: Option<String>) -> Result<()> {
     let scheme = Some(setup_scheme(args.ssh, args.http).to_string());
 
     let cli_overrides = CliOverrides {
+        host: server,
         remote: args.remote.clone(),
         scheme,
         insecure,
         ..Default::default()
     };
     let mut app = App::new(work_dir, &cli_overrides)?;
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
 
     eprintln!("Setting up grt for Gerrit...");
 
     // 1. Install commit-msg hook
-    let hooks_dir = app.git.hooks_dir()?;
+    let hooks_dir = app.require_git()?.hooks_dir()?;
     let hook_path = hooks_dir.join("commit-msg");
     if args.force_hook && hook_path.exists() {
         std::fs::remove_file(&hook_path).context("removing existing commit-msg hook")?;

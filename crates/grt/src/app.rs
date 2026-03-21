@@ -23,29 +23,60 @@ enum CredentialSource {
 /// Application context holding shared resources.
 pub struct App {
     pub config: GerritConfig,
-    pub git: GitRepo,
+    pub git: Option<GitRepo>,
     pub gerrit: GerritClient,
     credential_source: Option<CredentialSource>,
     insecure: bool,
 }
 
 impl App {
-    /// Open a repo, load config, and create a Gerrit client.
+    /// Open a repo (if available), load config, and create a Gerrit client.
+    ///
+    /// If `work_dir` is not inside a git repository, `git` will be `None` and
+    /// config will be loaded using the credentials-file default and CLI flags.
+    /// Commands that require git (push, setup) must call
+    /// `app.git.as_ref().ok_or_else(|| anyhow!("not in a git repo"))`.
     pub fn new(work_dir: &Path, cli: &CliOverrides) -> Result<Self> {
-        let git = GitRepo::open(work_dir).context("opening git repository")?;
-        let root = git.root()?;
+        let (git, root) = match GitRepo::open(work_dir) {
+            Ok(git) => {
+                let root = git.root()?;
+                (Some(git), root)
+            }
+            Err(_) => (None, work_dir.to_path_buf()),
+        };
 
-        let config = config::load_config(&root, |key| git.config_value(key), cli)?;
+        let config = match &git {
+            Some(g) => config::load_config(&root, |key| g.config_value(key), cli)?,
+            None => config::load_config(&root, |_| None, cli)?,
+        };
 
         if config.host.is_empty() {
+            let config_path = dirs::config_dir()
+                .map(|d| d.join("grt").join("credentials.toml").display().to_string())
+                .unwrap_or_else(|| "~/.config/grt/credentials.toml".to_string());
             anyhow::bail!(
-                "no Gerrit host configured. Create a .gitreview file or set gitreview.host in git config"
+                "no Gerrit host configured. Options:\n\
+                   1. Run grt from inside a repo that has a .gitreview file\n\
+                   2. Set gitreview.host in git config\n\
+                   3. Use --server <host> to specify the host directly\n\
+                   4. Mark a server as 'default = true' in {config_path}\n\
+                 \n\
+                 Example credentials.toml entry:\n\
+                 \n\
+                   [[server]]\n\
+                   name = \"review.opendev.org\"\n\
+                   username = \"you\"\n\
+                   password = \"your-http-password\"\n\
+                   default = true"
             );
         }
 
-        if config.project.is_empty() {
+        if config.project.is_empty() && git.is_some() {
             anyhow::bail!(
-                "no Gerrit project configured. Set project in .gitreview or gitreview.project in git config"
+                "no Gerrit project configured. Options:\n\
+                   1. Set project in .gitreview\n\
+                   2. Set gitreview.project in git config\n\
+                   3. Use --project <project> to specify the project directly"
             );
         }
 
@@ -59,6 +90,13 @@ impl App {
             credential_source: None,
             insecure: cli.insecure,
         })
+    }
+
+    /// Return the git repo, or fail with a helpful error for commands that require one.
+    pub fn require_git(&self) -> Result<&GitRepo> {
+        self.git
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("not in a git repo; this command requires a git repository"))
     }
 
     /// Acquire credentials: try credentials.toml first, then git credential helper.
@@ -103,7 +141,7 @@ impl App {
 
         // Fall back to git credential helper (always Basic auth)
         let url = self.config.gerrit_base_url()?.to_string();
-        let root = self.git.root()?;
+        let root = self.require_git()?.root()?;
         let (username, password) = subprocess::git_credential_fill(&url, &root)
             .context("acquiring credentials")?
             .ok_or_else(|| {
@@ -170,13 +208,15 @@ impl App {
     fn approve_git_credentials(&self) {
         if let Some(creds) = self.gerrit.credentials() {
             if let Ok(url) = self.config.gerrit_base_url() {
-                if let Ok(root) = self.git.root() {
-                    let _ = subprocess::git_credential_approve(
-                        url.as_str(),
-                        &creds.username,
-                        &creds.password,
-                        &root,
-                    );
+                if let Some(git) = &self.git {
+                    if let Ok(root) = git.root() {
+                        let _ = subprocess::git_credential_approve(
+                            url.as_str(),
+                            &creds.username,
+                            &creds.password,
+                            &root,
+                        );
+                    }
                 }
             }
         }
@@ -185,13 +225,15 @@ impl App {
     fn reject_git_credentials(&self) {
         if let Some(creds) = self.gerrit.credentials() {
             if let Ok(url) = self.config.gerrit_base_url() {
-                if let Ok(root) = self.git.root() {
-                    let _ = subprocess::git_credential_reject(
-                        url.as_str(),
-                        &creds.username,
-                        &creds.password,
-                        &root,
-                    );
+                if let Some(git) = &self.git {
+                    if let Ok(root) = git.root() {
+                        let _ = subprocess::git_credential_reject(
+                            url.as_str(),
+                            &creds.username,
+                            &creds.password,
+                            &root,
+                        );
+                    }
                 }
             }
         }

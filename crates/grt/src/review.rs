@@ -353,7 +353,7 @@ pub async fn cmd_review_download(
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
     let remote = app.config.remote.clone();
     let remote_url =
         review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
@@ -405,7 +405,7 @@ pub async fn cmd_review_cherrypick(app: &mut App, change_arg: &str) -> Result<()
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
     let remote = app.config.remote.clone();
     let remote_url =
         review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
@@ -433,7 +433,7 @@ pub async fn cmd_review_cherrypickindicate(app: &mut App, change_arg: &str) -> R
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
     let remote = app.config.remote.clone();
     let remote_url =
         review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
@@ -461,7 +461,7 @@ pub async fn cmd_review_cherrypickonly(app: &mut App, change_arg: &str) -> Resul
     let normalized = normalize_change_arg(change_arg);
     let (change_id, patchset) = parse_change_patchset(&normalized);
 
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
     let remote = app.config.remote.clone();
     let remote_url =
         review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
@@ -551,7 +551,7 @@ pub async fn cmd_review_compare(
     };
     let (change_id, ps_from, ps_to) = parse_compare_arg(&normalized)?;
 
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
     let remote = app.config.remote.clone();
     let remote_url =
         review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?
@@ -745,7 +745,7 @@ pub async fn cmd_review_list(
     verbose: bool,
     format: &OutputFormat,
 ) -> Result<()> {
-    let root = app.git.root()?;
+    let root = app.require_git()?.root()?;
     let remote = app.config.remote.clone();
     let remote_url =
         review_query::resolve_remote_url(&remote, &root, Some(&app.config.make_remote_url()))?

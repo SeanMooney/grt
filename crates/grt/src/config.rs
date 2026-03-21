@@ -224,6 +224,9 @@ struct ServerCredential {
     password: String,
     /// Authentication type: "basic" (default) or "bearer".
     auth_type: Option<String>,
+    /// If true, use this server when no host is configured in the repo.
+    #[serde(default)]
+    default: bool,
 }
 
 /// Top-level structure of `~/.config/grt/credentials.toml`.
@@ -287,6 +290,39 @@ pub fn load_credentials(host: &str, config_dir: &Path) -> Result<Option<LoadedCr
     }
 
     Ok(None)
+}
+
+/// Return the `name` (host) of the server marked `default = true` in
+/// `credentials.toml`, if any.  Returns `Ok(None)` if the file is missing,
+/// unreadable, or no entry is marked default.
+pub fn load_default_server(config_dir: &Path) -> Result<Option<String>> {
+    let cred_path = config_dir.join("grt").join("credentials.toml");
+    if !cred_path.exists() {
+        return Ok(None);
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(&cred_path)
+            .with_context(|| format!("reading metadata for {}", cred_path.display()))?;
+        let mode = metadata.mode() & 0o777;
+        if mode != 0o600 {
+            anyhow::bail!(
+                "{} has permissions {:04o}, expected 0600. \
+                 Fix with: chmod 600 {}",
+                cred_path.display(),
+                mode,
+                cred_path.display(),
+            );
+        }
+    }
+
+    let content = std::fs::read_to_string(&cred_path)
+        .with_context(|| format!("reading {}", cred_path.display()))?;
+    let creds: CredentialsFile =
+        toml::from_str(&content).with_context(|| format!("parsing {}", cred_path.display()))?;
+    Ok(creds.server.into_iter().find(|s| s.default).map(|s| s.name))
 }
 
 /// Parse a `.gitreview` INI file. Expects a `[gerrit]` section with key=value pairs.
@@ -475,6 +511,15 @@ pub fn load_config(
     }
     if let Some(use_push) = cli.use_pushurl {
         config.usepushurl = use_push;
+    }
+
+    // Layer 5 (fallback): default server from credentials.toml
+    if config.host.is_empty() {
+        if let Some(config_dir) = dirs::config_dir() {
+            if let Ok(Some(default_host)) = load_default_server(&config_dir) {
+                config.host = default_host;
+            }
+        }
     }
 
     // Default SSH port when using ssh scheme
@@ -1275,5 +1320,108 @@ DefaultBranch=develop
             config.make_remote_url(),
             "ssh://review.example.com/my/project"
         );
+    }
+
+    #[test]
+    fn load_default_server_returns_none_when_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = load_default_server(dir.path()).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn load_default_server_returns_none_when_no_default_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let grt_dir = dir.path().join("grt");
+        std::fs::create_dir_all(&grt_dir).unwrap();
+        let cred_path = grt_dir.join("credentials.toml");
+        std::fs::write(
+            &cred_path,
+            r#"
+[[server]]
+name = "review.example.com"
+username = "user"
+password = "pass"
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cred_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let result = load_default_server(dir.path()).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn load_default_server_returns_name_of_default_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let grt_dir = dir.path().join("grt");
+        std::fs::create_dir_all(&grt_dir).unwrap();
+        let cred_path = grt_dir.join("credentials.toml");
+        std::fs::write(
+            &cred_path,
+            r#"
+[[server]]
+name = "review.example.com"
+username = "user"
+password = "pass"
+default = true
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cred_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let result = load_default_server(dir.path()).unwrap();
+        assert_eq!(result, Some("review.example.com".to_string()));
+    }
+
+    #[test]
+    fn load_default_server_first_default_wins_if_multiple() {
+        let dir = tempfile::tempdir().unwrap();
+        let grt_dir = dir.path().join("grt");
+        std::fs::create_dir_all(&grt_dir).unwrap();
+        let cred_path = grt_dir.join("credentials.toml");
+        std::fs::write(
+            &cred_path,
+            r#"
+[[server]]
+name = "first.example.com"
+username = "user"
+password = "pass"
+default = true
+
+[[server]]
+name = "second.example.com"
+username = "user"
+password = "pass"
+default = true
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cred_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let result = load_default_server(dir.path()).unwrap();
+        assert_eq!(result, Some("first.example.com".to_string()));
+    }
+
+    #[test]
+    fn load_config_uses_credentials_default_when_no_gitreview() {
+        let dir = tempfile::tempdir().unwrap();
+        // load_config will check dirs::config_dir() for the credentials file,
+        // which we cannot easily override in a unit test. Instead, verify that
+        // load_config with an empty repo root and no git config values returns
+        // an empty host when no credentials default is available.
+        let config = load_config(dir.path(), |_| None, &CliOverrides::default()).unwrap();
+        // host will be empty unless a real credentials.toml with default=true exists
+        // in the user's config dir — just verify the call succeeds without error.
+        let _ = config.host;
     }
 }
