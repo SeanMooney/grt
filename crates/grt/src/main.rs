@@ -224,6 +224,14 @@ struct SetupArgs {
     /// Download hook from remote Gerrit server instead of using vendored copy
     #[arg(long)]
     remote_hook: bool,
+
+    /// Use SSH transport for the Gerrit remote (default)
+    #[arg(long, conflicts_with = "http")]
+    ssh: bool,
+
+    /// Use HTTPS transport for the Gerrit remote
+    #[arg(long, conflicts_with = "ssh")]
+    http: bool,
 }
 
 /// CLI personality based on argv[0].
@@ -310,16 +318,36 @@ fn resolve_color_remote(no_color: bool, color: Option<&str>) -> String {
     }
 }
 
+/// Prompt the user for their Gerrit username on stderr, read from stdin.
+/// Returns an error if stdin is not a tty or input is empty.
+fn prompt_for_username() -> Result<String> {
+    use std::io::IsTerminal as _;
+
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("stdin is not a tty; set gitreview.username in git config");
+    }
+    eprint!("Enter your Gerrit username: ");
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .context("reading username from stdin")?;
+    let username = line.trim().to_string();
+    if username.is_empty() {
+        anyhow::bail!("Gerrit username cannot be empty");
+    }
+    Ok(username)
+}
+
 /// Check if the configured remote exists, and create it if possible.
 ///
 /// - If remote exists with a tracking branch: no-op
 /// - If remote exists but no tracking branch: run `git remote update`
 /// - If remote doesn't exist and config has enough info: create it
-fn check_and_create_remote(app: &App) -> Result<()> {
-    let remote = &app.config.remote;
+fn check_and_create_remote(app: &mut App) -> Result<()> {
+    let remote = app.config.remote.clone();
     let root = app.git.root()?;
 
-    match subprocess::check_remote_exists(remote, &root)? {
+    match subprocess::check_remote_exists(&remote, &root)? {
         Some(_url) => {
             // Remote exists — check if tracking branch exists
             let tracking_ref = format!("refs/remotes/{}/{}", remote, app.config.branch);
@@ -329,7 +357,7 @@ fn check_and_create_remote(app: &App) -> Result<()> {
 
             if !has_tracking {
                 tracing::info!("Remote '{remote}' exists but has no tracking branch, updating...");
-                subprocess::git_remote_update(remote, &root)?;
+                subprocess::git_remote_update(&remote, &root)?;
             }
         }
         None => {
@@ -338,15 +366,22 @@ fn check_and_create_remote(app: &App) -> Result<()> {
                 return Ok(()); // Not enough config to auto-create
             }
 
+            // For SSH remotes, prompt for username if not configured
+            if app.config.scheme.starts_with("ssh") && app.config.username.is_none() {
+                let username = prompt_for_username()?;
+                app.config.username = Some(username.clone());
+                // Persist to git config so it's not asked again
+                subprocess::git_exec(&["config", "gitreview.username", &username], &root)?;
+            }
+
             let url = app.config.make_remote_url();
             tracing::info!("Creating remote '{remote}' with URL {url}...");
-            subprocess::git_remote_add(remote, &url, &root)?;
+            subprocess::git_remote_add(&remote, &url, &root)?;
 
             // Set push URL if usepushurl is configured
             if app.config.usepushurl {
-                // For push URL, use HTTPS scheme if available
                 let push_url = app.config.make_remote_url();
-                subprocess::git_remote_set_push_url(remote, &push_url, &root)?;
+                subprocess::git_remote_set_push_url(&remote, &push_url, &root)?;
             }
         }
     }
@@ -423,6 +458,8 @@ async fn cmd_review(
                 remote: args.remote.clone(),
                 force_hook: false,
                 remote_hook: args.remote_hook,
+                ssh: false,
+                http: false,
             },
             insecure,
         )
@@ -446,7 +483,7 @@ async fn cmd_review(
     let mut app = App::new(work_dir, &cli_overrides)?;
 
     // Ensure remote exists (auto-create if possible)
-    check_and_create_remote(&app)?;
+    check_and_create_remote(&mut app)?;
 
     // Resolve branch via --track if no explicit branch given (before all mode dispatches)
     let branch = if args.track && args.branch.is_none() {
@@ -580,11 +617,11 @@ async fn cmd_push(work_dir: &Path, args: PushArgs, insecure: bool) -> Result<()>
         insecure,
         ..Default::default()
     };
-    let app = App::new(work_dir, &cli_overrides)?;
+    let mut app = App::new(work_dir, &cli_overrides)?;
     let root = app.git.root()?;
 
     // Ensure remote exists (auto-create if possible)
-    check_and_create_remote(&app)?;
+    check_and_create_remote(&mut app)?;
 
     // Ensure commit-msg hook is installed
     let hooks_dir = app.git.hooks_dir()?;
@@ -803,9 +840,20 @@ async fn cmd_comments(work_dir: &Path, args: CommentsArgs, insecure: bool) -> Re
     Ok(())
 }
 
+/// Resolve the transport scheme for `grt setup`.
+///
+/// SSH is the default and is used whenever `--http` is not passed.
+/// `--ssh` is accepted for explicitness but has the same effect as omitting both flags.
+fn setup_scheme(_ssh: bool, http: bool) -> &'static str {
+    if http { "https" } else { "ssh" }
+}
+
 async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<()> {
+    let scheme = Some(setup_scheme(args.ssh, args.http).to_string());
+
     let cli_overrides = CliOverrides {
         remote: args.remote.clone(),
+        scheme,
         insecure,
         ..Default::default()
     };
@@ -841,12 +889,12 @@ async fn cmd_setup(work_dir: &Path, args: SetupArgs, insecure: bool) -> Result<(
         tracing::warn!("failed to propagate hook to submodules: {e}");
     }
 
-    // 2. Verify remote exists
+    // 2. Ensure remote exists (create if missing, prompt for SSH username if needed)
+    check_and_create_remote(&mut app)?;
     let remote = args.remote.unwrap_or_else(|| app.config.remote.clone());
-    let remote_check = subprocess::git_output(&["remote", "get-url", &remote], &root);
-    match remote_check {
-        Ok(url) => eprintln!("  remote '{remote}': {url}"),
-        Err(_) => eprintln!("  remote '{remote}': NOT FOUND (you may need to add it)"),
+    match subprocess::git_output(&["remote", "get-url", &remote], &root) {
+        Ok(url) => eprintln!("  remote '{remote}': {}", url.trim()),
+        Err(_) => eprintln!("  remote '{remote}': NOT FOUND"),
     }
 
     // 3. Test connectivity and auth
@@ -1354,5 +1402,65 @@ mod tests {
         } else {
             panic!("expected Review command");
         }
+    }
+
+    // === setup_scheme ===
+
+    #[test]
+    fn setup_scheme_no_flags_defaults_to_ssh() {
+        assert_eq!(setup_scheme(false, false), "ssh");
+    }
+
+    #[test]
+    fn setup_scheme_explicit_ssh_flag_is_ssh() {
+        assert_eq!(setup_scheme(true, false), "ssh");
+    }
+
+    #[test]
+    fn setup_scheme_http_flag_is_https() {
+        assert_eq!(setup_scheme(false, true), "https");
+    }
+
+    #[test]
+    fn parse_setup_defaults_to_no_flags() {
+        let cli = Cli::parse_from(["grt", "setup"]);
+        if let Commands::Setup(args) = cli.command {
+            assert!(!args.ssh);
+            assert!(!args.http);
+            assert_eq!(setup_scheme(args.ssh, args.http), "ssh");
+        } else {
+            panic!("expected Setup command");
+        }
+    }
+
+    #[test]
+    fn parse_setup_ssh_flag() {
+        let cli = Cli::parse_from(["grt", "setup", "--ssh"]);
+        if let Commands::Setup(args) = cli.command {
+            assert!(args.ssh);
+            assert!(!args.http);
+            assert_eq!(setup_scheme(args.ssh, args.http), "ssh");
+        } else {
+            panic!("expected Setup command");
+        }
+    }
+
+    #[test]
+    fn parse_setup_http_flag() {
+        let cli = Cli::parse_from(["grt", "setup", "--http"]);
+        if let Commands::Setup(args) = cli.command {
+            assert!(!args.ssh);
+            assert!(args.http);
+            assert_eq!(setup_scheme(args.ssh, args.http), "https");
+        } else {
+            panic!("expected Setup command");
+        }
+    }
+
+    #[test]
+    fn parse_setup_ssh_and_http_conflict() {
+        // clap should reject --ssh and --http together
+        let result = Cli::try_parse_from(["grt", "setup", "--ssh", "--http"]);
+        assert!(result.is_err(), "--ssh and --http should conflict");
     }
 }
