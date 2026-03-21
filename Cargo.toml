@@ -6,11 +6,11 @@ members = ["crates/*"]
 name = "grt"
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 rust-version = "1.85.0"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/smooney/grt"
+repository = "https://github.com/SeanMooney/grt"
 description = "CLI/TUI tool for Git and Gerrit workflows"
 
 [workspace.dependencies]

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2] — 2026-03-21
+
+### Fixed
+
+- Correct repository URL from `smooney` to `SeanMooney` in `Cargo.toml`
+- Fix `just release` to not `cd` before `gh release create`, which caused binary path resolution to fail
+
 ## [0.0.1] — 2026-03-21
 
 ### Added
